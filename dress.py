@@ -8,23 +8,6 @@ from sys import *
 
 #grammar_whitespace = re.compile("\s*")
 
-def PrintIndented( string, indentation ):
-    for i in range( 0, indentation ):
-        stdout.write( " " )
-    for c in string:
-        stdout.write( c )
-        if c == "\n":
-            for i in range( 0, indentation ):
-                stdout.write( " " )
-    stdout.write( "\n" )
-
-def PrintElements( element, indentation = 0 ):
-    PrintIndented( element.__repr__(), indentation )
-    if not element:
-        return
-    for e in element.elements:
-        PrintElements( e, indentation + 4 )
-
 #
 # Grammar classes
 #
@@ -553,9 +536,9 @@ class ClassHead( Grammar ):
                                                                         OPTIONAL( BaseClause ) )
 
 class VirtSpecifier( Grammar ):
-    grammar = OR( "override",
-                  "final",
-                  "new" )
+    grammar = OR( LITERAL( "override" ),
+                  LITERAL( "final" ),
+                  LITERAL( "new" ) )
 
 class VirtSpecifierSeq( Grammar ):
     grammar = REPEAT( VirtSpecifier )
@@ -981,6 +964,92 @@ class DeclarationSeq( Grammar ):
 class TranslationUnit( Grammar ):
     grammar = DeclarationSeq, EOF
 
+    def elem_init( self, sessiondata ):
+        self.start = 0
+        self.end = len( self.string )
+    
+#
+# Functions
+#
+
+def PrintIndented( string, indentation ):
+    for i in range( 0, indentation ):
+        stdout.write( " " )
+    for c in string:
+        stdout.write( c )
+        if c == "\n":
+            for i in range( 0, indentation ):
+                stdout.write( " " )
+    stdout.write( "\n" )
+
+def PrintElements( element, indentation = 0 ):
+    PrintIndented( element.__repr__(), indentation )
+    if not element:
+        return
+    PrintIndented( "POSITION: " + str( element.start ) , indentation )
+    for e in element.elements:
+        PrintElements( e, indentation + 4 )
+
+def RemoveNoneElements( elements ):
+    i = 0
+    elements = list( elements )
+    while i < len( elements ):
+        element = elements[i]
+        if element:
+            element.elements = RemoveNoneElements( element.elements )
+        else:
+            del elements[i]
+        i += 1
+    elements = tuple( elements )
+    return elements
+
+def PrintElementStrings( element, string ):
+    if not element:
+        return
+    if not element.elements:
+        stdout.write( string[element.start:element.end] )
+    else:
+        first_non_none_subelement = None
+        last_non_none_subelement = None
+
+        for subelement in element.elements:
+            if subelement:
+                first_non_none_subelement = subelement
+                break
+
+        for subelement in reversed( element.elements ):
+            if subelement:
+                last_non_none_subelement = subelement
+                break
+
+        if not first_non_none_subelement:
+            stdout.write( string[element.start:element.end] )
+            return
+
+        stdout.write( string[element.start:first_non_none_subelement.start] )
+        for i, subelement in enumerate( element.elements ):
+            if not subelement:
+                continue
+            PrintElementStrings( subelement, string )
+            if i != len( element.elements ) - 1:
+                next_non_none_subelement = None
+                for next_subelement in element.elements[i+1:]:
+                    if next_subelement:
+                        next_non_none_subelement = next_subelement
+                        break
+                if next_non_none_subelement:
+                    stdout.write( string[ subelement.end: next_non_none_subelement.start ] )
+        stdout.write( string[last_non_none_subelement.end:element.end] )
+
+def CalculateElementsRanges( elements, string, offset = 0 ):
+    for element in elements:
+        if not element:
+            continue
+        element.start = string.index( element.string, offset )
+        element.end   = element.start + len( element.string )
+        offset = element.end
+        CalculateElementsRanges( element.elements, string, element.start )
+
 def main():
     #parser = Identifier.parser()
     #stdout.writelines( generate_ebnf(Identifier) )
@@ -991,16 +1060,13 @@ def main():
     
     #TranslationUnit.grammar_resolve_refs( )
     parser = TranslationUnit.parser()
-    print( parser )
-    print ()
-    #string = """
-    #void f( hell a );"""
     string = stdin.read()
     result = parser.parse_string( string, reset = True, eof = True )
     if not result:
         print( "Failed to parse" )
         return
-    PrintElements( result )
+    CalculateElementsRanges( result, string )
+    PrintElementStrings( result, string )
 
 if __name__ == "__main__":
     main()
