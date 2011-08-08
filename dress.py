@@ -445,7 +445,7 @@ class DecltypeSpecifier( Grammar ):
 class NestedNameSpecifier( Grammar ):
     grammar = OPTIONAL( ( OR( TypeName,
                               NamespaceName,
-                              DecltypeSpecifier ), "::" ), collapse = True ), \
+                              DecltypeSpecifier ), "::" ) ), \
               REPEAT( ( OR( Identifier,
                             ( OPTIONAL( "template" ), SimpleTemplateId ) ), "::" ), min = 0 )
 
@@ -467,7 +467,6 @@ class SimpleTypeSpecifier( Grammar ):
                   "void",
                   "auto",
                   DecltypeSpecifier )
-    grammar_collapse = True
 
 class ClassKey( Grammar ):
     grammar = OR( "class",
@@ -566,7 +565,7 @@ class MemberDeclarator( Grammar ): #incomplete
                   ( OPTIONAL( Identifier ), OPTIONAL( REF( "AttributeSpecifierSeq" ) ), OPTIONAL( VirtSpecifierSeq ), ":", REPEAT( EXCEPT( BalancedToken_Template, WORD( ",;" ) ), collapse = True ) ) ) 
 
 class MemberDeclaratorList( Grammar ):
-    grammar = LIST_OF( MemberDeclarator, sep = "," )
+    grammar = LIST_OF( MemberDeclarator, sep = ",", collapse = True )
 
 class OverloadableOperator( Grammar ):
     grammar = OR( "new",
@@ -693,10 +692,14 @@ class MemberDeclaration( Grammar ):
 
 class MemberSpecification( Grammar ):
     grammar = OR( MemberDeclaration,
-                  ( AccessSpecifier, ":" ) ), OPTIONAL( REF( "MemberSpecification" ) )
+                  ( AccessSpecifier, ":" ) )
+
+class MemberSpecificationSeq( Grammar ):
+    grammar = REPEAT( MemberSpecification, collapse = True )
+    grammar_collapse = True
 
 class ClassSpecifier( Grammar ):
-    grammar = ClassHead, "{", OPTIONAL( MemberSpecification ), "}"
+    grammar = ClassHead, "{", OPTIONAL( MemberSpecificationSeq ), "}"
 
 class EnumKey( Grammar ):
     grammar = "enum", OPTIONAL( OR( "class",
@@ -742,7 +745,6 @@ class AttributeSpecifier( Grammar ):
 
 class AttributeSpecifierSeq( Grammar ):
     grammar = REPEAT( AttributeSpecifier, collapse = True, greedy = False )
-    grammar_collapse = True
 
 class StorageClassSpecifier( Grammar ):
     grammar = OR( "auto",
@@ -771,10 +773,9 @@ class DeclSpecifierSeq( Grammar ):
 class DeclaratorId( Grammar ):
     grammar = OR( ( OPTIONAL( "..." ), IdExpression ),
                   ( OPTIONAL( "::" ), OPTIONAL( NestedNameSpecifier ), ClassName ) )
-    grammar_collapse = True
 
 class ParameterDeclarationList( Grammar ):
-    grammar = LIST_OF( ParameterDeclaration, sep = "," )
+    grammar = LIST_OF( ParameterDeclaration, sep = ",", collapse = True )
 
 class ParameterDeclarationClause( Grammar ):
     grammar = OR( ( OPTIONAL( ParameterDeclarationList ), OPTIONAL( "..." ) ),
@@ -804,7 +805,6 @@ class NoptrDeclarator( Grammar ):
     grammar = OR( ( DeclaratorId, OPTIONAL( AttributeSpecifierSeq ) ),
                   ( "(", REF( "PtrDeclarator" ), ")" ) ), REPEAT( OR( ParametersAndQualifiers,
                                                                       ( "[", REPEAT( EXCEPT( BalancedToken_Template, WORD( "]" ) ), min = 0 ), "]", OPTIONAL( AttributeSpecifierSeq ) ) ), min = 0 )
-    grammar_collapse = True
 
 class PtrOperator( Grammar ):
     grammar = OR( ( "*", OPTIONAL( AttributeSpecifierSeq ), OPTIONAL( CvQualifierSeq ) ),
@@ -815,7 +815,6 @@ class PtrOperator( Grammar ):
 class PtrDeclarator( Grammar ):
     grammar = OR( NoptrDeclarator,
                   ( PtrOperator, REF( "PtrDeclarator" ) ) )
-    grammar_collapse = True
 
 class NoptrAbstractDeclarator( Grammar ):
     grammar = "(", REF( "PtrAbstractDeclarator" ), ")", REPEAT( OR( ParametersAndQualifiers,
@@ -986,7 +985,7 @@ def PrintElements( element, indentation = 0 ):
     PrintIndented( element.__repr__(), indentation )
     if not element:
         return
-    PrintIndented( "POSITION: " + str( element.start ) , indentation )
+    #PrintIndented( "POSITION: " + str( element.start ) , indentation )
     for e in element.elements:
         PrintElements( e, indentation + 4 )
 
@@ -1050,6 +1049,45 @@ def CalculateElementsRanges( elements, string, offset = 0 ):
         offset = element.end
         CalculateElementsRanges( element.elements, string, element.start )
 
+def RemoveComments( string ):
+    string_literal_pattern = re.compile( "\"(?:\\\\\"|[^\"])*\"" )
+    block_comment_pattern = re.compile( "/\*.*?\*/", re.MULTILINE | re.DOTALL )
+    line_comment_pattern = re.compile( "//.*?$", re.MULTILINE )
+    preprocessor_pattern = re.compile( "\\#(.*?($|\\\\.*?^))*$", re.MULTILINE | re.DOTALL )
+
+    ret = ""
+
+    i = 0
+    while i < len( string ):
+        match = string_literal_pattern.match( string[i:] )
+        if match:
+            ret += match.group()
+            i += len( match.group() )
+            continue
+
+        match = block_comment_pattern.match( string[i:] )
+        if not match:
+            match = line_comment_pattern.match( string[i:] )
+        if not match:
+            match = preprocessor_pattern.match( string[i:] )
+            
+        if match:
+            print ( "START" )
+            print( match.group() )
+            print ( "END" )
+            for j in match.group():
+                ret += " "
+            i += len( match.group() )
+            continue 
+
+        #
+        # Nothing has matched
+        #
+        ret += string[i]
+        i += 1
+
+    return ret
+
 def main():
     #parser = Identifier.parser()
     #stdout.writelines( generate_ebnf(Identifier) )
@@ -1059,14 +1097,22 @@ def main():
     #exit()
     
     #TranslationUnit.grammar_resolve_refs( )
-    parser = TranslationUnit.parser()
+   
     string = stdin.read()
+
+    string = RemoveComments( string )
+    print( string )
+    exit()
+
+    parser = TranslationUnit.parser()
     result = parser.parse_string( string, reset = True, eof = True )
     if not result:
         print( "Failed to parse" )
         return
     CalculateElementsRanges( result, string )
     PrintElementStrings( result, string )
+    print()
+    PrintElements( result )
 
 if __name__ == "__main__":
     main()
