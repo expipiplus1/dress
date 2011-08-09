@@ -15,6 +15,7 @@ from sys import *
 class END_OF_WORD( Terminal ):
   grammar_collapse = True
   grammar_collapse_skip = True
+  grammar_whitespace = False
   grammar_desc = "End of word"
 
   @classmethod
@@ -43,6 +44,7 @@ class END_OF_WORD( Terminal ):
 class Identifier( Grammar ):
     #grammar = RE( "[A-Za-z_][A-Za-z0-9_]*" )#WORD( startchars = "a-zA-Z_", restchars="a-zA-Z0-9_" )
     grammar = EXCEPT( RE( "[A-Za-z_][A-Za-z0-9_]*" ), REF( "Keyword" ) )
+    grammar_whitespace = False
 
 class AttributeNamespace( Grammar ):
     grammar = Identifier
@@ -128,6 +130,7 @@ class Keyword( Grammar ):
                   "volatile",
                   "wchar_t",
                   "while" ), END_OF_WORD
+    grammar_whitespace = False
 
 #class DecimalLiteral( Grammar ):
 #    grammar = ( OR ( ( NonZeroDigit ),
@@ -217,7 +220,7 @@ class UniversalCharacterName( Grammar ):
                         ( "U", HexQuad, HexQuad ) )
 
 class CChar( Grammar ):
-    grammar = OR( EXCEPT( ANY, WORD( "'\\\n" ) ),
+    grammar = OR( RE( "[^'\\\\\\n]" ),
                   EscapeSequence,
                   UniversalCharacterName )
 
@@ -271,7 +274,7 @@ class SCharSequence( Grammar ):
     #    return []
 
 class StringLiteral( Grammar ):
-    grammar = OPTIONAL( EncodingPrefix ), "\"", SCharSequence, "\""
+    grammar = OPTIONAL( EncodingPrefix ), "\"", OPTIONAL( SCharSequence ), "\""
 
 class BooleanLiteral( Grammar ):
     grammar = OR( "false",
@@ -367,26 +370,26 @@ class Token( Grammar ):
                   PreprocessingOpOrPunc )
 
 class BalancedToken( Grammar ):
-    grammar = OR( ( "(", REF( "BalancedTokenSeq" ), ")" ),
-                  ( "[", REF( "BalancedTokenSeq" ), "]" ),
-                  ( "{", REF( "BalancedTokenSeq" ), "}" ),
-                  EXCEPT( Token, WORD( "()[]{}" ) ) )
+    grammar = OR( ( "(", OPTIONAL( REF( "BalancedTokenSeq" ) ), ")" ),
+                  ( "[", OPTIONAL( REF( "BalancedTokenSeq" ) ), "]" ),
+                  ( "{", OPTIONAL( REF( "BalancedTokenSeq" ) ), "}" ),
+                  EXCEPT( Token, RE( "[([{]" ) ) )
     grammar_collapse = True
 
 class BalancedTokenSeq( Grammar ):
-    grammar = REPEAT( BalancedToken, min = 0 )
+    grammar = REPEAT( BalancedToken )
     grammar_collapse = True
 
 class BalancedToken_Template( Grammar ):
-    grammar = OR( ( "(", BalancedTokenSeq, ")" ),
-                  ( "[", BalancedTokenSeq, "]" ),
-                  ( "{", BalancedTokenSeq, "}" ),
-                  ( "<", REF( "BalancedTokenSeq_Template" ), ">" ),
-                  EXCEPT( Token, WORD( "()[]{}<>" ) ) )
+    grammar = OR( ( "(", OPTIONAL( BalancedTokenSeq ), ")" ),
+                  ( "[", OPTIONAL( BalancedTokenSeq ), "]" ),
+                  ( "{", OPTIONAL( BalancedTokenSeq ), "}" ),
+                  ( "<", OPTIONAL( REF( "BalancedTokenSeq_Template" ) ), ">" ),
+                  EXCEPT( Token, RE( "[([{<]" ) ) )
     grammar_collapse = True
 
 class BalancedTokenSeq_Template( Grammar ):
-    grammar = REPEAT( BalancedToken_Template, min = 0 )
+    grammar = REPEAT( BalancedToken_Template )
     grammar_collapse = True
 
 class AttributeArgumentClause( Grammar ):
@@ -402,13 +405,14 @@ class TemplateName( Grammar ):
     grammar = Identifier
 
 class TemplateArgument( Grammar ): #Incomplete
-    grammar = REPEAT( EXCEPT( BalancedToken_Template, RE( "," ) ), collapse = True )
+    grammar = REPEAT( EXCEPT( BalancedToken_Template, RE( "[,]" ) ), collapse = True )
     #grammar = OR( ConstantExpression,
     #              REF( "TypeId" ),
     #              IdExpression )
 
 class TemplateArgumentList( Grammar ):
-    grammar = LIST_OF( ( TemplateArgument, OPTIONAL( "..." ) ), sep = "," )
+    #grammar = LIST_OF( ( TemplateArgument, OPTIONAL( "..." ) ), sep = "," )
+    grammar = REPEAT( EXCEPT( BalancedToken_Template, RE( "[>]" ) ), min = 0 )
 
 class SimpleTemplateId( Grammar ):
     grammar = TemplateName, "<", OPTIONAL( TemplateArgumentList ), ">"
@@ -443,9 +447,9 @@ class DecltypeSpecifier( Grammar ):
     grammar = "decltype", "(", BalancedTokenSeq, ")"
 
 class NestedNameSpecifier( Grammar ):
-    grammar = OPTIONAL( ( OR( TypeName,
-                              NamespaceName,
-                              DecltypeSpecifier ), "::" ) ), \
+    grammar = OR( TypeName,
+                  NamespaceName,
+                  DecltypeSpecifier ), "::", \
               REPEAT( ( OR( Identifier,
                             ( OPTIONAL( "template" ), SimpleTemplateId ) ), "::" ), min = 0 )
 
@@ -474,7 +478,7 @@ class ClassKey( Grammar ):
                   "union" )
 
 class ElaboratedTypeSpecifier( Grammar ):
-    grammar = OR( ( ClassKey, OPTIONAL( REF( "AttributeSpecifierSeq" ) ), "::", OPTIONAL( NestedNameSpecifier ), Identifier ),
+    grammar = OR( ( ClassKey, OPTIONAL( REF( "AttributeSpecifierSeq" ) ), OPTIONAL( "::" ), OPTIONAL( NestedNameSpecifier ), Identifier ),
                   ( ClassKey, OPTIONAL( "::" ), OPTIONAL( NestedNameSpecifier ), OPTIONAL( "template" ), SimpleTemplateId ),
                   ( "enum", OPTIONAL( "::" ), OPTIONAL( NestedNameSpecifier ), Identifier ) )
 
@@ -562,7 +566,7 @@ class BraceOrEqualInitializer( Grammar ):
 class MemberDeclarator( Grammar ): #incomplete
     grammar = OR( ( REF( "Declarator" ), OPTIONAL( VirtSpecifierSeq ), OPTIONAL( OR( PureSpecifier,
                                                                                      BraceOrEqualInitializer ) ) ),
-                  ( OPTIONAL( Identifier ), OPTIONAL( REF( "AttributeSpecifierSeq" ) ), OPTIONAL( VirtSpecifierSeq ), ":", REPEAT( EXCEPT( BalancedToken_Template, WORD( ",;" ) ), collapse = True ) ) ) 
+                  ( OPTIONAL( Identifier ), OPTIONAL( REF( "AttributeSpecifierSeq" ) ), OPTIONAL( VirtSpecifierSeq ), ":", REPEAT( EXCEPT( BalancedToken_Template, RE( "[,;]" ) ), collapse = True ) ) ) 
 
 class MemberDeclaratorList( Grammar ):
     grammar = LIST_OF( MemberDeclarator, sep = ",", collapse = True )
@@ -645,7 +649,7 @@ class UsingDeclaration( Grammar ):
                            ( "::", UnqualifiedId, ";" ) )
 
 class StaticAssertDeclaration( Grammar ):
-    grammar = "static_assert", "(", REPEAT( EXCEPT( BalancedToken_Template, WORD( ",;" ) ), collapse = True ), ",", StringLiteral, ")", ";"
+    grammar = "static_assert", "(", REPEAT( EXCEPT( BalancedToken_Template, RE( "[,;]" ) ), collapse = True ), ",", StringLiteral, ")", ";"
 
 class QualifiedId( Grammar ):
     grammar = OR( ( OPTIONAL( "::" ), NestedNameSpecifier, OPTIONAL( "template"  ), UnqualifiedId ),
@@ -716,7 +720,7 @@ class Enumerator( Grammar ):
     grammar = Identifier
 
 class EnumeratorDefinition( Grammar ):
-    grammar = Enumerator, OPTIONAL( "=", REPEAT( EXCEPT( BalancedToken_Template, WORD( ",;}" ) ), collapse = True ) )
+    grammar = Enumerator, OPTIONAL( "=", REPEAT( EXCEPT( BalancedToken_Template, RE( "[,;}]" ) ), collapse = True ) )
 
 class EnumeratorList( Grammar ):
     grammar = LIST_OF( EnumeratorDefinition, sep = "," )
@@ -792,7 +796,7 @@ class DynamicExceptionSpecification( Grammar ):
     grammar = "throw", "(", OPTIONAL( TypeIdList ), ")"
 
 class NoexceptSpecification( Grammar ):
-    grammar = "noexcept", OPTIONAL( "(", REPEAT( EXCEPT( BalancedToken_Template, WORD( ")" ) ), collapse = True ), ")" )
+    grammar = "noexcept", OPTIONAL( "(", REPEAT( EXCEPT( BalancedToken_Template, RE( "[)]" ) ), collapse = True ), ")" )
 
 class ExceptionSpecification( Grammar ):
     grammar = OR( DynamicExceptionSpecification,
@@ -804,7 +808,7 @@ class ParametersAndQualifiers( Grammar ):
 class NoptrDeclarator( Grammar ):
     grammar = OR( ( DeclaratorId, OPTIONAL( AttributeSpecifierSeq ) ),
                   ( "(", REF( "PtrDeclarator" ), ")" ) ), REPEAT( OR( ParametersAndQualifiers,
-                                                                      ( "[", REPEAT( EXCEPT( BalancedToken_Template, WORD( "]" ) ), min = 0 ), "]", OPTIONAL( AttributeSpecifierSeq ) ) ), min = 0 )
+                                                                      ( "[", REPEAT( EXCEPT( BalancedToken_Template, RE( "[\\]]" ) ), min = 0 ), "]", OPTIONAL( AttributeSpecifierSeq ) ) ), min = 0 )
 
 class PtrOperator( Grammar ):
     grammar = OR( ( "*", OPTIONAL( AttributeSpecifierSeq ), OPTIONAL( CvQualifierSeq ) ),
@@ -818,7 +822,7 @@ class PtrDeclarator( Grammar ):
 
 class NoptrAbstractDeclarator( Grammar ):
     grammar = "(", REF( "PtrAbstractDeclarator" ), ")", REPEAT( OR( ParametersAndQualifiers,
-                                                                    ( "[", REPEAT( EXCEPT( BalancedToken_Template, WORD( "]" ) ), collapse = True ), "]", OPTIONAL( AttributeSpecifierSeq ) ) ) )
+                                                                    ( "[", REPEAT( EXCEPT( BalancedToken_Template, RE( "[\\]]" ) ), collapse = True ), "]", OPTIONAL( AttributeSpecifierSeq ) ) ) )
 
 class PtrAbstractDeclarator( Grammar ):
     grammar = OR( NoptrAbstractDeclarator,
@@ -846,7 +850,7 @@ class MemInitializerId( Grammar ):
                   Identifier )
 
 class MemInitializer( Grammar ):
-    grammar = MemInitializerId, OR( ( "(", REPEAT( EXCEPT( BalancedToken_Template, WORD( ")" ) ), min = 0 ), ")" ),
+    grammar = MemInitializerId, OR( ( "(", REPEAT( EXCEPT( BalancedToken_Template, RE( "[)]" ) ), min = 0 ), ")" ),
                                     BracedInitList )
 
 class MemInitializerList( Grammar ):
@@ -880,7 +884,7 @@ class FunctionDefinition( Grammar ):
 
 class Initializer( Grammar ):
     grammar = OR( BraceOrEqualInitializer,
-                  ( "(", REPEAT( EXCEPT( BalancedToken_Template, WORD( ")" ) ) ), ")" ) )
+                  ( "(", REPEAT( EXCEPT( BalancedToken_Template, RE( "[)]" ) ) ), ")" ) )
 
 class InitDeclarator( Grammar ):
     grammar = Declarator, OPTIONAL( Initializer )
@@ -946,8 +950,8 @@ class AttributeDeclaration( Grammar ):
     grammar = AttributeSpecifierSeq, ";"
 
 class Declaration( Grammar ):
-    grammar = OR( BlockDeclaration,
-                  FunctionDefinition,
+    grammar = OR( FunctionDefinition,
+                  BlockDeclaration,
                   TemplateDeclaration,
                   ExplicitInstantiation,
                   ExplicitSpecialization,
@@ -1072,9 +1076,6 @@ def RemoveComments( string ):
             match = preprocessor_pattern.match( string[i:] )
             
         if match:
-            print ( "START" )
-            print( match.group() )
-            print ( "END" )
             for j in match.group():
                 ret += " "
             i += len( match.group() )
@@ -1089,20 +1090,21 @@ def RemoveComments( string ):
     return ret
 
 def main():
-    #parser = Identifier.parser()
-    #stdout.writelines( generate_ebnf(Identifier) )
+    #parser = BalancedTokenSeq.parser()
+    #stdout.writelines( generate_ebnf(BalancedTokenSeq) )
     #string = "float"
     #result = parser.parse_string( string, reset = True, eof = True )
     #PrintElements( result )
     #exit()
-    
+    #
     #TranslationUnit.grammar_resolve_refs( )
    
     string = stdin.read()
 
+    #f = open( "matrix.hpp", "r" )
+    #string = f.read()
+
     string = RemoveComments( string )
-    print( string )
-    exit()
 
     parser = TranslationUnit.parser()
     result = parser.parse_string( string, reset = True, eof = True )
