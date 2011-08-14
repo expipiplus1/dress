@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from modgrammar import *
-from modgrammar import Terminal, error_result
+from modgrammar import Terminal, error_result, util, GrammarClass
 from modgrammar.extras import *
 import re
 from sys import *
@@ -13,39 +13,276 @@ from sys import *
 #
 
 class END_OF_WORD( Terminal ):
-  grammar_collapse = True
-  grammar_collapse_skip = True
-  grammar_whitespace = False
-  grammar_desc = "End of word"
+    grammar_collapse = True
+    grammar_collapse_skip = True
+    grammar_whitespace = False
+    grammar_desc = "End of word"
+  
+    @classmethod
+    def grammar_parse(cls, text, index, sessiondata):
+        string = text.string[index:]
+        if len( string ) == 0:
+            yield (0, cls(""))
+        end_of_word_pattern = re.compile( "[^a-zA-Z0-9_]" )
+        match = end_of_word_pattern.match( string )
+        if match:
+            yield (0, cls(""))
+        yield error_result(index, cls)
+  
+    @classmethod
+    def grammar_ebnf_lhs(cls, opts):
+        return ("(*end of word*)", ())
+  
+    @classmethod
+    def grammar_ebnf_rhs(cls, opts):
+        return None
 
-  @classmethod
-  def grammar_parse(cls, text, index, sessiondata):
-    string = text.string[index:]
-    if len( string ) == 0:
-        yield (0, cls(""))
-    end_of_word_pattern = re.compile( "[^a-zA-Z0-9_]" )
-    match = end_of_word_pattern.match( string )
-    if match:
-        yield (0, cls(""))
-    yield error_result(index, cls)
+def BALANCED_TOKENS( opening_char, closing_char, **kwargs ):
+    cdict = util.make_classdict( BalancedGrammar, (), kwargs, opening_char = opening_char, closing_char = closing_char )
+    return GrammarClass( "<BalancedGrammar>", ( BalancedGrammar, ), cdict )
 
-  @classmethod
-  def grammar_ebnf_lhs(cls, opts):
-    return ("(*end of word*)", ())
+class BalancedGrammar (Terminal):
+    grammar_desc = "Balanced Braces"
+    opening_char = None
+    closing_char = None
 
-  @classmethod
-  def grammar_ebnf_rhs(cls, opts):
-    return None
+    #@classmethod
+    #def __class_init__(cls, attrs):
+        #if isinstance(cls.regexp, str):
+            #cls.regexp = re.compile(cls.regexp, re.MULTILINE)
+        #if cls.regexp and _recaret_re.search(cls.regexp.pattern):
+            #cls.boltest = True
+        #else:
+            #cls.boltest = False
+        #if "grammar_name" not in attrs:
+            #if cls.regexp is not None:
+                #cls.grammar_name = "RE({!r})".format(cls.regexp.pattern)
+            #else:
+                #cls.grammar_name = None
+
+    @classmethod
+    def grammar_parse(cls, text, index, sessiondata):
+        i = index
+        depth = 0
+        string = text.string
+        while i < len( string ):
+            c = string[i]
+            if c == cls.opening_char:
+                depth += 1
+            elif c == cls.closing_char:
+                depth -= 1
+
+            elif c == "\"":
+                i += 1
+                while i < len( string ):
+                    if string[i] == "\"" and string[i-1] != "\\":
+                        break
+                    i += 1
+            elif c == "'":
+                i += 1
+                while i < len( string ):
+                    if string[i] == "'" and string[i-1] != "\\":
+                        break
+                    i += 1
+            if depth < 0:
+                yield( i - index, cls( string[index:i] ) )
+                break
+            i += 1
+        yield error_result( index, cls )
+                           
+    @classmethod
+    def grammar_ebnf_lhs(cls, opts):
+      return (util.ebnf_specialseq(cls, opts), ())
+
+    @classmethod
+    def grammar_ebnf_rhs(cls, opts):
+      return None
+
+def BALANCED_UNTIL_TOKENS( ending_chars, use_templates = False, **kwargs ):
+    bracket_pairs = [ ( "{", "}" ),
+                      ( "(", ")" ),
+                      ( "[", "]" ) ]
+
+    independent_bracket_pair = ( "<", ">" ) if use_templates else ()
+    
+    cdict = util.make_classdict( BalancedUntilGrammar, (), kwargs, ending_chars = ending_chars, bracket_pairs = bracket_pairs, independent_bracket_pair = independent_bracket_pair )
+    return GrammarClass( "<BalancedUntilGrammar>", ( BalancedUntilGrammar, ), cdict )
+
+class BalancedUntilGrammar (Terminal):
+    grammar_desc = "Balanced Until"
+    ending_chars = None
+    bracket_pairs = None
+    independent_bracket_pair = None
+
+    @classmethod
+    def read_until(cls, string, index, stop_chars ):
+        i = index
+        while i < len( string ):
+            c = string[i]
+            if c in stop_chars:
+                return i
+            if c == "\"":
+                i += 1
+                while i < len( string ):
+                    if string[i] == "\"" and string[i-1] != "\\":
+                        break
+                    i += 1
+            elif c == "'":
+                i += 1
+                while i < len( string ):
+                    if string[i] == "'" and string[i-1] != "\\":
+                        break
+                    i += 1
+            i += 1
+
+    @classmethod
+    def grammar_parse(cls, text, index, sessiondata):
+        i = index
+        ind_depth = 0
+        string = text.string
+        while i < len( string ):
+            c = string[i]
+            if c in cls.ending_chars and ind_depth <= 0:
+                yield( i - index, cls( string[index:i] ) )
+                break
+            if c == cls.independent_bracket_pair[0]:
+                ind_depth += 1
+            elif c == cls.independent_bracket_pair[1]:
+                ind_depth = max( 0, ind_depth - 1 )
+
+            for bracket_pair in cls.bracket_pairs:
+                if c == bracket_pair[0]:
+                    depth = 1
+                    i += 1
+                    while depth > 0:
+                        i = cls.read_until( string, i, ( bracket_pair[0], bracket_pair[1] ) )
+                        if string[i] == bracket_pair[0]:
+                            depth += 1
+                        else:
+                            depth -= 1
+                    break
+            i += 1
+        yield error_result( index, cls )
+                           
+    @classmethod
+    def grammar_ebnf_lhs(cls, opts):
+      return (util.ebnf_specialseq(cls, opts), ())
+
+    @classmethod
+    def grammar_ebnf_rhs(cls, opts):
+      return None
 
 #
 # C++ Grammar
 #
 
-class Identifier( Grammar ):
-    #grammar = RE( "[A-Za-z_][A-Za-z0-9_]*" )#WORD( startchars = "a-zA-Z_", restchars="a-zA-Z0-9_" )
-    grammar = EXCEPT( RE( "[A-Za-z_][A-Za-z0-9_]*" ), REF( "Keyword" ) )
-    grammar_whitespace = False
+"""
+class BalancedToken( Grammar ):
+    grammar = OR( ( "(", OPTIONAL( REF( "BalancedTokenSeq" ) ), ")" ),
+                  ( "[", OPTIONAL( REF( "BalancedTokenSeq" ) ), "]" ),
+                  ( "{", OPTIONAL( REF( "BalancedTokenSeq" ) ), "}" ),
+                  EXCEPT( Token, RE( "[([{]" ) ) )
+    grammar_collapse = True
 
+class BalancedTokenSeq( Grammar ):
+    grammar = REPEAT( BalancedToken )
+    grammar_collapse = True
+
+class BalancedToken_Template( Grammar ):
+    grammar = OR( ( "(", OPTIONAL( BalancedTokenSeq ), ")" ),
+                  ( "[", OPTIONAL( BalancedTokenSeq ), "]" ),
+                  ( "{", OPTIONAL( BalancedTokenSeq ), "}" ),
+                  ( "<", OPTIONAL( REF( "BalancedTokenSeq_Template" ) ), ">" ),
+                  EXCEPT( Token, RE( "[([{<]" ) ) )
+    grammar_collapse = True
+
+class BalancedTokenSeq_Template( Grammar ):
+    grammar = REPEAT( BalancedToken_Template )
+    grammar_collapse = True
+
+class AttributeArgumentClause( Grammar ):
+    grammar = "(", BalancedTokenSeq, ")"
+
+class Attribute( Grammar ):
+    grammar = AttributeToken, OPTIONAL( AttributeArgumentClause )
+
+class AttributeList( Grammar ):
+    grammar = LIST_OF( ( Attribute, OPTIONAL( "..." ) ), sep = "," ), OPTIONAL( "," )
+
+
+
+class TypeId( Grammar ): 
+    grammar = TypeSpecifierSeq, OPTIONAL( REF( "AbstractDeclarator" ) )
+
+
+
+
+
+
+
+
+
+class CompoundStatement( Grammar ): #Incomplete
+    grammar = "{", OPTIONAL( REPEAT( OR( RE( "[^{}\\\"]+" ),
+                                         REF( "CompoundStatement" ),
+                                         QuotedString ) ) ), "}"
+
+class MemInitializerId( Grammar ):
+    grammar = OR( ClassOrDecltype,
+                  Identifier )
+
+class MemInitializer( Grammar ):
+    grammar = MemInitializerId, OR( ( "(", REPEAT( EXCEPT( BalancedToken_Template, RE( "[)]" ) ), min = 0 ), ")" ),
+                                    BracedInitList )
+
+class MemInitializerList( Grammar ):
+    grammar = LIST_OF( ( MemInitializer, OPTIONAL( "..." ) ), sep = "," )
+
+class CtorInitializer( Grammar ):
+    grammar = ":", MemInitializerList
+
+class ExceptionDeclaration( Grammar ):
+    grammar = OR( ( OPTIONAL( AttributeSpecifierSeq ), TypeSpecifierSeq, OR( Declarator,
+                                                                             OPTIONAL( AbstractDeclarator ) ) ),
+                  "..." )
+
+class Handler( Grammar ):
+    grammar = "catch", "(", ExceptionDeclaration, ")", CompoundStatement
+
+class HandlerSeq( Grammar ):
+    grammar = REPEAT( Handler )
+
+class FunctionTryBlock( Grammar ):
+    grammar = "try", OPTIONAL( CtorInitializer ), CompoundStatement, HandlerSeq
+
+class FunctionBody( Grammar ): 
+    grammar = OR( ( OPTIONAL( CtorInitializer ), CompoundStatement ),
+                  FunctionTryBlock )
+
+
+
+
+class UsingDirective( Grammar ):
+    grammar = OPTIONAL( AttributeSpecifierSeq ), "using", "namespace", OPTIONAL( "::" ), OPTIONAL( NestedNameSpecifier ), NamespaceName, ";"
+
+
+class ExplicitInstantiation( Grammar ):
+    grammar = OPTIONAL( "extern" ), "template", REF( "Declaration" )
+
+class ExplicitSpecialization( Grammar ):
+    grammar = "template", "<", ">", REF( "Declaration" )
+
+class LinkageSpecification( Grammar ):
+    grammar = "extern", StringLiteral, OR( ( "{", OPTIONAL( REF( "DeclarationSeq" ) ), "}" ),
+                                           REF( "Declaration" ) ) 
+
+
+class EmptyDeclaration( Grammar ):
+    grammar = ";"
+
+class AttributeDeclaration( Grammar ):
+    grammar = AttributeSpecifierSeq, ";"
+    
 class AttributeNamespace( Grammar ):
     grammar = Identifier
 
@@ -55,6 +292,24 @@ class AttributeScopedToken( Grammar ):
 class AttributeToken( Grammar ):
     grammar = OR( Identifier,
                   AttributeScopedToken )
+  """  
+
+
+
+
+
+
+    ###################################################
+    ###################################################
+    ###################################################
+    ###################################################
+    ###################################################
+    ###################################################
+    ###################################################
+    
+class Identifier( Grammar ):
+    grammar = EXCEPT( RE( "[A-Za-z_][A-Za-z0-9_]*" ), REF( "Keyword" ) )
+    grammar_whitespace = False
 
 class Keyword( Grammar ):
     grammar = OR( "alignas",     #C++0x
@@ -368,90 +623,56 @@ class Token( Grammar ):
                   Keyword,
                   Literal,
                   PreprocessingOpOrPunc )
+    grammar = RE( "[^\"]|\"(?:[^\\\\]|\\\\\")*\"" ) 
 
-class BalancedToken( Grammar ):
-    grammar = OR( ( "(", OPTIONAL( REF( "BalancedTokenSeq" ) ), ")" ),
-                  ( "[", OPTIONAL( REF( "BalancedTokenSeq" ) ), "]" ),
-                  ( "{", OPTIONAL( REF( "BalancedTokenSeq" ) ), "}" ),
-                  EXCEPT( Token, RE( "[([{]" ) ) )
-    grammar_collapse = True
+class AlignmentSpecifier( Grammar ): #Incomplete
+    grammar = "alignas", "(", BALANCED_TOKENS( "(", ")" ), ")"
 
-class BalancedTokenSeq( Grammar ):
-    grammar = REPEAT( BalancedToken )
-    grammar_collapse = True
+class AttributeSpecifier( Grammar ): #Incomplete
+    grammar = OR( ( "[", "[", BALANCED_TOKENS( "[", "]" ), "]", "]" ),
+                  AlignmentSpecifier )
 
-class BalancedToken_Template( Grammar ):
-    grammar = OR( ( "(", OPTIONAL( BalancedTokenSeq ), ")" ),
-                  ( "[", OPTIONAL( BalancedTokenSeq ), "]" ),
-                  ( "{", OPTIONAL( BalancedTokenSeq ), "}" ),
-                  ( "<", OPTIONAL( REF( "BalancedTokenSeq_Template" ) ), ">" ),
-                  EXCEPT( Token, RE( "[([{<]" ) ) )
-    grammar_collapse = True
+class AttributeSpecifierSeq( Grammar ):
+    grammar = REPEAT( AttributeSpecifier, collapse = True, greedy = False )
 
-class BalancedTokenSeq_Template( Grammar ):
-    grammar = REPEAT( BalancedToken_Template )
-    grammar_collapse = True
-
-class AttributeArgumentClause( Grammar ):
-    grammar = "(", BalancedTokenSeq, ")"
-
-class Attribute( Grammar ):
-    grammar = AttributeToken, OPTIONAL( AttributeArgumentClause )
-
-class AttributeList( Grammar ):
-    grammar = LIST_OF( ( Attribute, OPTIONAL( "..." ) ), sep = "," ), OPTIONAL( "," )
-
-class TemplateName( Grammar ):
-    grammar = Identifier
-
-class TemplateArgument( Grammar ): #Incomplete
-    grammar = REPEAT( EXCEPT( BalancedToken_Template, RE( "[,]" ) ), collapse = True )
-    #grammar = OR( ConstantExpression,
-    #              REF( "TypeId" ),
-    #              IdExpression )
-
-class TemplateArgumentList( Grammar ):
-    #grammar = LIST_OF( ( TemplateArgument, OPTIONAL( "..." ) ), sep = "," )
-    grammar = REPEAT( EXCEPT( BalancedToken_Template, RE( "[>]" ) ), min = 0 )
-
-class SimpleTemplateId( Grammar ):
-    grammar = TemplateName, "<", OPTIONAL( TemplateArgumentList ), ">"
-
-class ClassName( Grammar ):
-    grammar = OR( Identifier,
-                  SimpleTemplateId )
-
+class StorageClassSpecifier( Grammar ):
+    grammar = OR( "auto",
+                  "register",
+                  "static",
+                  "thread_local",
+                  "extern",
+                  "mutable" )
+                  
 class EnumName( Grammar ):
     grammar = Identifier
 
 class TypedefName( Grammar ):
     grammar = Identifier
 
-class TypeName( Grammar ):
-    grammar = OR( Identifier, #ClassName,
-                  #EnumName,
-                  #TypedefName )
-                  SimpleTemplateId )
-
-class OriginalNamespaceName( Grammar ):
-    grammar = Identifier
-
-class NamespaceAlias( Grammar ):
-    grammar = Identifier
-
 class NamespaceName( Grammar ):
-    grammar = OR( OriginalNamespaceName,
-                  NamespaceAlias )
+    grammar = Identifier
 
 class DecltypeSpecifier( Grammar ):
-    grammar = "decltype", "(", BalancedTokenSeq, ")"
+    #grammar = "decltype", "(", REPEAT( Token, greedy = False, collapse = True ), ")"
+    grammar = "decltype", "(", BALANCED_TOKENS( "(", ")" ), ")"
+
+class TemplateArgumentList( Grammar ):
+    #grammar = REPEAT( Token, greedy = False, collapse = True )
+    grammar = BALANCED_UNTIL_TOKENS( ">", True )
+
+class SimpleTemplateId( Grammar ):
+    grammar = Identifier, "<", OPTIONAL( TemplateArgumentList ), ">"
+
+class SimpleTemplateId_Suffix( Grammar ):
+    grammar = "<", OPTIONAL( TemplateArgumentList ), ">"
+
+class TypeName( Grammar ):
+    grammar = Identifier, OPTIONAL( SimpleTemplateId_Suffix )
 
 class NestedNameSpecifier( Grammar ):
     grammar = OR( TypeName,
-                  NamespaceName,
                   DecltypeSpecifier ), "::", \
-              REPEAT( ( OR( Identifier,
-                            ( OPTIONAL( "template" ), SimpleTemplateId ) ), "::" ), min = 0 )
+              REPEAT( ( Identifier, OPTIONAL( OPTIONAL( "template" ), SimpleTemplateId_Suffix ), "::" ), min = 0, collapse = True )
 
 class SimpleTypeSpecifier( Grammar ):
     grammar = OR( ( OPTIONAL( "::" ), OPTIONAL( NestedNameSpecifier ), TypeName ),
@@ -481,26 +702,22 @@ class ElaboratedTypeSpecifier( Grammar ):
     grammar = OR( ( ClassKey, OPTIONAL( REF( "AttributeSpecifierSeq" ) ), OPTIONAL( "::" ), OPTIONAL( NestedNameSpecifier ), Identifier ),
                   ( ClassKey, OPTIONAL( "::" ), OPTIONAL( NestedNameSpecifier ), OPTIONAL( "template" ), SimpleTemplateId ),
                   ( "enum", OPTIONAL( "::" ), OPTIONAL( NestedNameSpecifier ), Identifier ) )
-
+                  
 class TypenameSpecifier( Grammar ):
-    grammar = "typename", OPTIONAL( "::" ), NestedNameSpecifier, OR( Identifier,
-                                                                     ( OPTIONAL( "template" ), SimpleTemplateId ) )
+    grammar = "typename", OPTIONAL( "::" ), NestedNameSpecifier, Identifier, OPTIONAL( ( OPTIONAL( "template" ), SimpleTemplateId_Suffix ) )
 
 class CvQualifier( Grammar ):
     grammar = OR( "const",
                   "volatile" )
-
-class CvQualifierSeq( Grammar ):
-    grammar = REPEAT( CvQualifier )
-
+                  
 class TrailingTypeSpecifier( Grammar ):
     grammar = OR( SimpleTypeSpecifier,
                   ElaboratedTypeSpecifier,
                   TypenameSpecifier,
                   CvQualifier )
 
-class TrailingTypeSpecifierSeq( Grammar ):
-    grammar = REPEAT( TrailingTypeSpecifier ), OPTIONAL( REF( "AttributeSpecifierSeq" ) )
+class ClassName( Grammar ):
+    grammar = Identifier, OPTIONAL( SimpleTemplateId_Suffix )
 
 class ClassHeadName( Grammar ):
     grammar = OPTIONAL( NestedNameSpecifier ), ClassName
@@ -508,9 +725,6 @@ class ClassHeadName( Grammar ):
 class ClassVirtSpecifier( Grammar ):
     grammar = OR( "final", 
                   "explicit" )
-
-class ClassVirtSpecifierSeq( Grammar ):
-    grammar = REPEAT( ClassVirtSpecifier )
 
 class AccessSpecifier( Grammar ):
     grammar = OR( "private",
@@ -521,55 +735,15 @@ class ClassOrDecltype( Grammar ):
     grammar = OR( ( OPTIONAL( "::" ), OPTIONAL( NestedNameSpecifier ), ClassName ),
                   DecltypeSpecifier )
 
-class BaseTypeSpecifier( Grammar ):
-    grammar = ClassOrDecltype
-
 class BaseSpecifier( Grammar ):
-    grammar = OPTIONAL( REF( "AttributeSpecifierSeq" ) ), OPTIONAL( OR( ( "virtual", OPTIONAL( AccessSpecifier ) ),
-                                                               ( AccessSpecifier, OPTIONAL( "virtual" ) ) ) ), BaseTypeSpecifier
-
-class BaseSpecifierList( Grammar ):
-    grammar = LIST_OF( ( BaseSpecifier, OPTIONAL( "..." ) ), sep = "," )
+    grammar = OPTIONAL( AttributeSpecifierSeq ), OPTIONAL( OR( ( "virtual", OPTIONAL( AccessSpecifier ) ),
+                                                               ( AccessSpecifier, OPTIONAL( "virtual" ) ) ) ), ClassOrDecltype
 
 class BaseClause( Grammar ):
-    grammar = ":", BaseSpecifierList
-
+    grammar = ":", LIST_OF( ( BaseSpecifier, OPTIONAL( "..." ) ), sep = "," )
+    
 class ClassHead( Grammar ):
-    grammar = ClassKey, OPTIONAL( REF( "AttributeSpecifierSeq" ) ), OR( ( ClassHeadName, OPTIONAL( ClassVirtSpecifierSeq ), OPTIONAL( BaseClause ) ),
-                                                                        OPTIONAL( BaseClause ) )
-
-class VirtSpecifier( Grammar ):
-    grammar = OR( LITERAL( "override" ),
-                  LITERAL( "final" ),
-                  LITERAL( "new" ) )
-
-class VirtSpecifierSeq( Grammar ):
-    grammar = REPEAT( VirtSpecifier )
-
-class PureSpecifier( Grammar ):
-    grammar = LITERAL( "=" ), LITERAL( "0" )
-
-class InitializerList( Grammar ):
-    grammar = LIST_OF( ( REF( "InitializerClause" ), OPTIONAL( "..." ) ), sep = "," )
-
-class BracedInitList( Grammar ):
-    grammar = "{", OPTIONAL( InitializerList, OPTIONAL( "," ) ), "}"
-
-class InitializerClause( Grammar ):
-    grammar = OR( BracedInitList,
-                  REPEAT( EXCEPT( BalancedToken_Template, RE( ",|;" ) ), collapse = True ) )
-
-class BraceOrEqualInitializer( Grammar ):
-    grammar = OR( ( "=", InitializerClause ),
-                  BracedInitList )
-
-class MemberDeclarator( Grammar ): #incomplete
-    grammar = OR( ( REF( "Declarator" ), OPTIONAL( VirtSpecifierSeq ), OPTIONAL( OR( PureSpecifier,
-                                                                                     BraceOrEqualInitializer ) ) ),
-                  ( OPTIONAL( Identifier ), OPTIONAL( REF( "AttributeSpecifierSeq" ) ), OPTIONAL( VirtSpecifierSeq ), ":", REPEAT( EXCEPT( BalancedToken_Template, RE( "[,;]" ) ), collapse = True ) ) ) 
-
-class MemberDeclaratorList( Grammar ):
-    grammar = LIST_OF( MemberDeclarator, sep = ",", collapse = True )
+    grammar = ClassKey, OPTIONAL( AttributeSpecifierSeq ), OPTIONAL( ClassHeadName, REPEAT( ClassVirtSpecifier, min = 0 ) ), OPTIONAL( BaseClause )
 
 class OverloadableOperator( Grammar ):
     grammar = OR( "new",
@@ -616,24 +790,28 @@ class OverloadableOperator( Grammar ):
                   ( L("["), L("]") ) )
 
 class OperatorFunctionId( Grammar ):
-    grammar = "operator", OverloadableOperator, OPTIONAL( "<", OPTIONAL( TemplateArgumentList ), ">" )
+    grammar = "operator", OverloadableOperator, OPTIONAL( "<", TemplateArgumentList, ">" )
 
-class ConversionDeclarator( Grammar ):
-    grammar = REPEAT( REF( "PtrOperator" ) )
 
-class ConversionTypeId( Grammar ):
-    grammar = REF( "TypeSpecifierSeq" ), OPTIONAL( ConversionDeclarator )
+class TypeSpecifierSeq( Grammar ):
+    grammar = REPEAT( REF( "TypeSpecifier" ) ), OPTIONAL( AttributeSpecifierSeq )
+
+
+class PtrOperator( Grammar ):
+    grammar = OR( ( OPTIONAL( OPTIONAL( "::" ), NestedNameSpecifier ), "*", OPTIONAL( AttributeSpecifierSeq ), REPEAT( CvQualifier, min = 0 ) ),
+                  ( OR( "&",
+                        "&&" ), OPTIONAL( AttributeSpecifierSeq ) ) )
 
 class ConversionFunctionId( Grammar ):
-    grammar = "operator", ConversionTypeId
+    grammar = "operator", TypeSpecifierSeq, REPEAT( PtrOperator, min = 0 )
 
 class LiteralOperatorId( Grammar ):
     grammar = "operator", "\"", "\"", Identifier
 
 class TemplateId( Grammar ):
-    grammar = OR( REF( "SimpleTemplateId" ),
+    grammar = OR( SimpleTemplateId,
                   ( OR( OperatorFunctionId,
-                        LiteralOperatorId ), "<", OPTIONAL( TemplateArgumentList ), ">" ) )
+                        LiteralOperatorId ), "<", TemplateArgumentList, ">" ) )
 
 class UnqualifiedId( Grammar ):
     grammar = OR( Identifier,
@@ -644,13 +822,6 @@ class UnqualifiedId( Grammar ):
                   ( "~", DecltypeSpecifier ),
                   TemplateId )
 
-class UsingDeclaration( Grammar ):
-    grammar = "using", OR( ( OPTIONAL( "typename" ), OPTIONAL( "::" ), NestedNameSpecifier, UnqualifiedId, ";" ),
-                           ( "::", UnqualifiedId, ";" ) )
-
-class StaticAssertDeclaration( Grammar ):
-    grammar = "static_assert", "(", REPEAT( EXCEPT( BalancedToken_Template, RE( "[,;]" ) ), collapse = True ), ",", StringLiteral, ")", ";"
-
 class QualifiedId( Grammar ):
     grammar = OR( ( OPTIONAL( "::" ), NestedNameSpecifier, OPTIONAL( "template"  ), UnqualifiedId ),
                   ( "::", OR( Identifier,
@@ -658,105 +829,155 @@ class QualifiedId( Grammar ):
                               LiteralOperatorId,
                               TemplateId ) ) )
 
-class IdExpression( Grammar ):
-    grammar = OR( UnqualifiedId,
-                  QualifiedId )
+class DeclaratorId( Grammar ):
+    grammar = OR( ( OPTIONAL( "..." ), OR( UnqualifiedId,
+                                           QualifiedId ) ),
+                  ( OPTIONAL( "::" ), OPTIONAL( NestedNameSpecifier ), ClassName ) )
 
-class TypeParameter( Grammar ):
-    grammar = OR( ( OR( "class", 
-                        "typename" ), OR( ( OPTIONAL( "..." ), OPTIONAL( Identifier ) ),
-                                          ( OPTIONAL( Identifier ), "=", REF( "TypeId" ) ) ) ),
-                  ( "template", "<", REF( "TemplateParameterList" ), ">", "class", OR( ( OPTIONAL( "..." ), OPTIONAL( Identifier ) ),
-                                                                              ( OPTIONAL( Identifier ), "=", IdExpression ) ) ) )
+#class ParameterDeclarationList( Grammar ):
+#    grammar = LIST_OF( ParameterDeclaration, sep = ",", collapse = True )
 
-class ParameterDeclaration( Grammar ):
-    grammar = OPTIONAL( REF( "AttributeSpecifierSeq" ) ), REF( "DeclSpecifierSeq" ), OR( REF( "Declarator" ),
-                                                                                OPTIONAL( REF( "AbstractDeclarator" ) ) ), OPTIONAL( "=", InitializerClause )
+class ParameterDeclarationClause( Grammar ):
+    #grammar = REPEAT( Token, min = 0, greedy = False, collapse = True )
+    #grammar = OR( ( OPTIONAL( ParameterDeclarationList ), OPTIONAL( "..." ) ),
+                  #( ParameterDeclarationList, ",", "..." ) )
+    grammar = BALANCED_UNTIL_TOKENS( ")", True )
 
-class TemplateParameter( Grammar ):
-    grammar = OR( TypeParameter,
-                  ParameterDeclaration )
+class RefQualifier( Grammar ):
+    grammar = OR( "&",
+                  "&&" )
 
-class TemplateParameterList( Grammar ):
-    grammar = LIST_OF( TemplateParameter, sep = "," )
+#class TypeIdList( Grammar ):
+    #grammar = LIST_OF( (TypeId, OPTIONAL( "..." ) ), sep = "," )
+
+class DynamicExceptionSpecification( Grammar ):
+    #grammar = "throw", "(", REPEAT( Token, greedy = False, min = 0, collapse = True ), ")"
+    grammar = "throw", "(", BALANCED_TOKENS( "(", ")" ), ")"
+
+class NoexceptSpecification( Grammar ):
+    grammar = "noexcept", OPTIONAL( "(", BALANCED_TOKENS( "(", ")" ), ")" )
+
+class ExceptionSpecification( Grammar ):
+    grammar = OR( DynamicExceptionSpecification,
+                  NoexceptSpecification )
+
+class ParametersAndQualifiers( Grammar ):
+    grammar = "(", ParameterDeclarationClause, ")", OPTIONAL( AttributeSpecifierSeq ), REPEAT( CvQualifier, min = 0 ), OPTIONAL( RefQualifier ), OPTIONAL( ExceptionSpecification )
+
+class NoptrDeclarator( Grammar ):
+    grammar = OR( ( DeclaratorId, OPTIONAL( AttributeSpecifierSeq ) ),
+                  ( "(", REF( "PtrDeclarator" ), ")" ) ), REPEAT( OR( ParametersAndQualifiers,
+                                                                      ( "[", BALANCED_TOKENS( "[", "]" ), "]", OPTIONAL( AttributeSpecifierSeq ) ) ), min = 0 )
+
+class PtrDeclarator( Grammar ):
+    grammar = OR( NoptrDeclarator,
+                  ( PtrOperator, REF( "PtrDeclarator" ) ) )
+
+class NoptrAbstractDeclarator( Grammar ):
+    grammar = "(", REF( "PtrAbstractDeclarator" ), ")", REPEAT( OR( ParametersAndQualifiers,
+                                                                    ( "[", BALANCED_TOKENS( "[", "]" ), "]", OPTIONAL( AttributeSpecifierSeq ) ) ) )
+
+class PtrAbstractDeclarator( Grammar ):
+    grammar = OR( NoptrAbstractDeclarator,
+                  ( PtrOperator, OPTIONAL( REF( "PtrAbstractDeclarator" ) ) ) )
+
+class AbstractDeclarator( Grammar ):
+    grammar = OR( PtrAbstractDeclarator,
+                  ( OPTIONAL( NoptrAbstractDeclarator ), ParametersAndQualifiers, REF( "TrailingReturnType" ) ),
+                  "..." )
+
+class TrailingReturnType( Grammar ):
+    grammar = "->", REPEAT( TrailingTypeSpecifier ), OPTIONAL( AttributeSpecifierSeq ), OPTIONAL( AbstractDeclarator )
+
+class Declarator( Grammar ):
+    grammar = OR( ( NoptrDeclarator, ParametersAndQualifiers, TrailingReturnType ),
+                  PtrDeclarator )
+
+class VirtSpecifier( Grammar ):
+    grammar = OR( "override",
+                  "final",
+                  "new" )
+
+class PureSpecifier( Grammar ):
+    grammar = LITERAL( "=" ), LITERAL( "0" )
+
+class BracedInitList( Grammar ):
+    #grammar = "{", REPEAT( Token, min = 0, greedy = False, collapse = True ), "}"
+    grammar = "{", BALANCED_TOKENS( "{", "}" ), "}"
+
+class InitializerClause( Grammar ):
+    grammar = OR( BracedInitList,
+                  BALANCED_UNTIL_TOKENS( ( ";", "," ), True ) )
+
+class BraceOrEqualInitializer( Grammar ):
+    grammar = OR( ( "=", InitializerClause ),
+                  BracedInitList )
+
+class MemberDeclarator( Grammar ): #incomplete
+    grammar = OR( ( Declarator, REPEAT( VirtSpecifier, min = 0 ), OPTIONAL( OR( PureSpecifier,
+                                                                                     BraceOrEqualInitializer ) ) ),
+                  ( OPTIONAL( Identifier ), OPTIONAL( AttributeSpecifierSeq ), REPEAT( VirtSpecifier, min = 0 ), ":", BALANCED_UNTIL_TOKENS( ( ";", "," ), True ) ) ) 
+
+class UsingDeclaration( Grammar ):
+    #grammar = "using", REPEAT( Token, greedy = False, collapse = True ), ";" 
+    grammar = "using", BALANCED_UNTIL_TOKENS( ";" )
+
+class StaticAssertDeclaration( Grammar ):
+    #grammar = "static_assert", REPEAT( Token, greedy = False, collapse = True ), ";" 
+    grammar = "static_assert", BALANCED_UNTIL_TOKENS( ";" )
 
 class TemplateDeclaration( Grammar ):
-    grammar = "template", "<", TemplateParameterList, ">", REF( "Declaration" )
+    #grammar = "template", "<", REPEAT( Token, min = 0, collapse = True, greedy = False ), ">", REF( "Declaration" )
+    grammar = "template", "<", BALANCED_UNTIL_TOKENS( ">", True ), ">", REF( "Declaration" )
 
-class AliasDeclaration( Grammar ):
-    grammar = "using", Identifier, "=", REF( "TypeId" ), ";"
+class BalancedBraces( Grammar ):
+    grammar = OR( EXCEPT( Token, "{" ),
+                  ( "{", REPEAT( REF( "BalancedBraces" ), min = 0, collapse = True ), "}" ) )
+    grammar_collapse = True
 
 class MemberDeclaration( Grammar ):
-    grammar = OR( ( OPTIONAL( REF( "AttributeSpecifierSeq" ) ), OPTIONAL( REF( "DeclSpecifierSeq" ) ), OPTIONAL( MemberDeclaratorList ), ";" ),
+    grammar = OR( ( OPTIONAL( AttributeSpecifierSeq ), OPTIONAL( REF( "DeclSpecifierSeq" ) ), OPTIONAL( LIST_OF( MemberDeclarator, sep = "," ) ), ";" ),
                   ( REF( "FunctionDefinition" ), OPTIONAL( ";" ) ),
                   UsingDeclaration,
                   StaticAssertDeclaration,
-                  TemplateDeclaration,
-                  AliasDeclaration )
+                  TemplateDeclaration )
+    grammar = REPEAT( EXCEPT( BalancedBraces, RE( ".*[;}]$" ) ) ), OPTIONAL( ";" )
+    grammar = REPEAT( EXCEPT( BalancedBraces, RE( ";" ) ) ), OPTIONAL( ";" )
+    
 
 class MemberSpecification( Grammar ):
-    grammar = OR( MemberDeclaration,
-                  ( AccessSpecifier, ":" ) )
-
-class MemberSpecificationSeq( Grammar ):
-    grammar = REPEAT( MemberSpecification, collapse = True )
-    grammar_collapse = True
+    grammar = OR( ( AccessSpecifier, ":" ),
+                  MemberDeclaration )
 
 class ClassSpecifier( Grammar ):
-    grammar = ClassHead, "{", OPTIONAL( MemberSpecificationSeq ), "}"
+    #grammar = ClassHead, "{", REPEAT( MemberSpecification, greedy = False, collapse = True, min = 0 ), "}"
+    grammar = ClassHead, "{", BALANCED_TOKENS( "{", "}" ), "}"
 
 class EnumKey( Grammar ):
     grammar = "enum", OPTIONAL( OR( "class",
                                     "struct" ) )
 
 class EnumBase( Grammar ):
-    grammar = ":", REF( "TypeSpecifierSeq" )
+    grammar = ":", TypeSpecifierSeq
 
 class EnumHead( Grammar ):
-    grammar = EnumKey, OPTIONAL( REF( "AttributeSpecifierSeq" ) ), OR( OPTIONAL( Identifier ),
-                                                                       ( NestedNameSpecifier, Identifier ) ), OPTIONAL( EnumBase )
-
-class Enumerator( Grammar ):
-    grammar = Identifier
+    grammar = EnumKey, OPTIONAL( AttributeSpecifierSeq ), OR( OPTIONAL( Identifier ),
+                                                              ( NestedNameSpecifier, Identifier ) ), OPTIONAL( EnumBase )
 
 class EnumeratorDefinition( Grammar ):
-    grammar = Enumerator, OPTIONAL( "=", REPEAT( EXCEPT( BalancedToken_Template, RE( "[,;}]" ) ), collapse = True ) )
+    grammar = Identifier, OPTIONAL( "=", BALANCED_UNTIL_TOKENS( ( ",", "}" ), True ) )
 
 class EnumeratorList( Grammar ):
     grammar = LIST_OF( EnumeratorDefinition, sep = "," )
 
 class EnumSpecifier( Grammar ):
-    grammar = EnumHead, "{", OPTIONAL( EnumeratorList, OPTIONAL( "," ) ), "}"
+    #grammar = EnumHead, "{", OPTIONAL( EnumeratorList, OPTIONAL( "," ) ), "}"
+    grammar = EnumHead, "{", BALANCED_TOKENS( "{", "}" ), "}"
 
 class TypeSpecifier( Grammar ):
     grammar = OR( TrailingTypeSpecifier,
                   ClassSpecifier,
                   EnumSpecifier )
-
-class TypeSpecifierSeq( Grammar ):
-    grammar = REPEAT( TypeSpecifier ), OPTIONAL( REF( "AttributeSpecifierSeq" ) )
-
-class TypeId( Grammar ): 
-    grammar = TypeSpecifierSeq, OPTIONAL( REF( "AbstractDeclarator" ) )
-
-class AlignmentSpecifier( Grammar ): #Incomplete
-    grammar = "alignas", "(", OR( TypeId,
-                                  REPEAT( EXCEPT( BalancedToken_Template, RE( "\\.{3}|\\)" ) ), collapse = True ) ), OPTIONAL( "..." ), ")"
-
-class AttributeSpecifier( Grammar ):
-    grammar = OR( ( "[", "[", AttributeList, "]", "]" ),
-                  AlignmentSpecifier )
-
-class AttributeSpecifierSeq( Grammar ):
-    grammar = REPEAT( AttributeSpecifier, collapse = True, greedy = False )
-
-class StorageClassSpecifier( Grammar ):
-    grammar = OR( "auto",
-                  "register",
-                  "static",
-                  "thread_local",
-                  "extern",
-                  "mutable" )
 
 class FunctionSpecifier( Grammar ):
     grammar = OR( "inline",
@@ -774,108 +995,15 @@ class DeclSpecifier( Grammar ):
 class DeclSpecifierSeq( Grammar ):
     grammar = REPEAT( DeclSpecifier, collapse = True, greedy = False ), OPTIONAL( AttributeSpecifierSeq )
 
-class DeclaratorId( Grammar ):
-    grammar = OR( ( OPTIONAL( "..." ), IdExpression ),
-                  ( OPTIONAL( "::" ), OPTIONAL( NestedNameSpecifier ), ClassName ) )
-
-class ParameterDeclarationList( Grammar ):
-    grammar = LIST_OF( ParameterDeclaration, sep = ",", collapse = True )
-
-class ParameterDeclarationClause( Grammar ):
-    grammar = OR( ( OPTIONAL( ParameterDeclarationList ), OPTIONAL( "..." ) ),
-                  ( ParameterDeclarationList, ",", "..." ) )
-
-class RefQualifier( Grammar ):
-    grammar = OR( "&",
-                  "&&" )
-
-class TypeIdList( Grammar ):
-    grammar = LIST_OF( (TypeId, OPTIONAL( "..." ) ), sep = "," )
-
-class DynamicExceptionSpecification( Grammar ):
-    grammar = "throw", "(", OPTIONAL( TypeIdList ), ")"
-
-class NoexceptSpecification( Grammar ):
-    grammar = "noexcept", OPTIONAL( "(", REPEAT( EXCEPT( BalancedToken_Template, RE( "[)]" ) ), collapse = True ), ")" )
-
-class ExceptionSpecification( Grammar ):
-    grammar = OR( DynamicExceptionSpecification,
-                  NoexceptSpecification )
-
-class ParametersAndQualifiers( Grammar ):
-    grammar = "(", ParameterDeclarationClause, ")", OPTIONAL( AttributeSpecifierSeq ), OPTIONAL( CvQualifierSeq ), OPTIONAL( RefQualifier ), OPTIONAL( ExceptionSpecification )
-
-class NoptrDeclarator( Grammar ):
-    grammar = OR( ( DeclaratorId, OPTIONAL( AttributeSpecifierSeq ) ),
-                  ( "(", REF( "PtrDeclarator" ), ")" ) ), REPEAT( OR( ParametersAndQualifiers,
-                                                                      ( "[", REPEAT( EXCEPT( BalancedToken_Template, RE( "[\\]]" ) ), min = 0 ), "]", OPTIONAL( AttributeSpecifierSeq ) ) ), min = 0 )
-
-class PtrOperator( Grammar ):
-    grammar = OR( ( "*", OPTIONAL( AttributeSpecifierSeq ), OPTIONAL( CvQualifierSeq ) ),
-                  ( OR( "&",
-                        "&&" ), OPTIONAL( AttributeSpecifierSeq ) ),
-                  ( OPTIONAL( "::" ), NestedNameSpecifier, "*", OPTIONAL( AttributeSpecifierSeq ), OPTIONAL( CvQualifierSeq ) ) )
-
-class PtrDeclarator( Grammar ):
-    grammar = OR( NoptrDeclarator,
-                  ( PtrOperator, REF( "PtrDeclarator" ) ) )
-
-class NoptrAbstractDeclarator( Grammar ):
-    grammar = "(", REF( "PtrAbstractDeclarator" ), ")", REPEAT( OR( ParametersAndQualifiers,
-                                                                    ( "[", REPEAT( EXCEPT( BalancedToken_Template, RE( "[\\]]" ) ), collapse = True ), "]", OPTIONAL( AttributeSpecifierSeq ) ) ) )
-
-class PtrAbstractDeclarator( Grammar ):
-    grammar = OR( NoptrAbstractDeclarator,
-                  ( PtrOperator, OPTIONAL( REF( "PtrAbstractDeclarator" ) ) ) )
-
-class AbstractDeclarator( Grammar ):
-    grammar = OR( PtrAbstractDeclarator,
-                  ( OPTIONAL( NoptrAbstractDeclarator ), ParametersAndQualifiers, REF( "TrailingReturnType" ) ),
-                  "..." )
-
-class TrailingReturnType( Grammar ):
-    grammar = "->", TrailingTypeSpecifierSeq, OPTIONAL( AbstractDeclarator )
-
-class Declarator( Grammar ):
-    grammar = OR( PtrDeclarator,
-                  ( NoptrDeclarator, ParametersAndQualifiers, TrailingReturnType ) )
-
-class CompoundStatement( Grammar ): #Incomplete
-    grammar = "{", OPTIONAL( REPEAT( OR( RE( "[^{}\\\"]+" ),
-                                         REF( "CompoundStatement" ),
-                                         QuotedString ) ) ), "}"
-
-class MemInitializerId( Grammar ):
-    grammar = OR( ClassOrDecltype,
-                  Identifier )
-
 class MemInitializer( Grammar ):
-    grammar = MemInitializerId, OR( ( "(", REPEAT( EXCEPT( BalancedToken_Template, RE( "[)]" ) ), min = 0 ), ")" ),
-                                    BracedInitList )
-
-class MemInitializerList( Grammar ):
-    grammar = LIST_OF( ( MemInitializer, OPTIONAL( "..." ) ), sep = "," )
+    grammar = ClassOrDecltype, OR( ( "(", BALANCED_TOKENS( "(", ")" ), ")" ),
+                                   BracedInitList )
 
 class CtorInitializer( Grammar ):
-    grammar = ":", MemInitializerList
+    grammar = ":", LIST_OF( MemInitializer, OPTIONAL( "..." ), sep = "," )
 
-class ExceptionDeclaration( Grammar ):
-    grammar = OR( ( OPTIONAL( AttributeSpecifierSeq ), TypeSpecifierSeq, OR( Declarator,
-                                                                             OPTIONAL( AbstractDeclarator ) ) ),
-                  "..." )
-
-class Handler( Grammar ):
-    grammar = "catch", "(", ExceptionDeclaration, ")", CompoundStatement
-
-class HandlerSeq( Grammar ):
-    grammar = REPEAT( Handler )
-
-class FunctionTryBlock( Grammar ):
-    grammar = "try", OPTIONAL( CtorInitializer ), CompoundStatement, HandlerSeq
-
-class FunctionBody( Grammar ): 
-    grammar = OR( ( OPTIONAL( CtorInitializer ), CompoundStatement ),
-                  FunctionTryBlock )
+class FunctionBody( Grammar ):
+    grammar = OPTIONAL( CtorInitializer ), "{", BALANCED_TOKENS( "{", "}" ), "}"
 
 class FunctionDefinition( Grammar ):
     grammar = OPTIONAL( AttributeSpecifierSeq ), OPTIONAL( DeclSpecifierSeq ), Declarator, OR( FunctionBody,
@@ -884,13 +1012,10 @@ class FunctionDefinition( Grammar ):
 
 class Initializer( Grammar ):
     grammar = OR( BraceOrEqualInitializer,
-                  ( "(", REPEAT( EXCEPT( BalancedToken_Template, RE( "[)]" ) ) ), ")" ) )
-
-class InitDeclarator( Grammar ):
-    grammar = Declarator, OPTIONAL( Initializer )
+                  ( "(", BALANCED_TOKENS( "(", ")" ), ")" ) )
 
 class InitDeclaratorList( Grammar ):
-    grammar = LIST_OF( InitDeclarator, sep = "," )
+    grammar = LIST_OF( Declarator, OPTIONAL( Initializer ), sep = "," )
 
 class SimpleDeclaration( Grammar ):
     grammar = OPTIONAL( AttributeSpecifierSeq ), OPTIONAL( DeclSpecifierSeq ), OPTIONAL( InitDeclaratorList ), ";"
@@ -899,13 +1024,10 @@ class AsmDefinition( Grammar ):
     grammar = "asm", "(", StringLiteral, ")"
 
 class QualifiedNamespaceSpecifier( Grammar ):
-    grammar = OPTIONAL( "::" ), OPTIONAL( NestedNameSpecifier ), NamespaceName
+    grammar = OPTIONAL( "::" ), OPTIONAL( NestedNameSpecifier ), Identifier
 
 class NamespaceAliasDefinition( Grammar ):
     grammar = "namespace", Identifier, "=", QualifiedNamespaceSpecifier, ";"
-
-class UsingDirective( Grammar ):
-    grammar = OPTIONAL( AttributeSpecifierSeq ), "using", "namespace", OPTIONAL( "::" ), OPTIONAL( NestedNameSpecifier ), NamespaceName, ";"
 
 class OpaqueEnumDeclaration( Grammar ):
     grammar = EnumKey, OPTIONAL( AttributeSpecifierSeq ), Identifier, OPTIONAL( EnumBase ), ";"
@@ -915,10 +1037,11 @@ class BlockDeclaration( Grammar ):
                   AsmDefinition,
                   NamespaceAliasDefinition,
                   UsingDeclaration,
-                  UsingDirective,
                   StaticAssertDeclaration,
-                  AliasDeclaration,
                   OpaqueEnumDeclaration )
+
+class NamespaceDefinition( Grammar ):
+    grammar = OPTIONAL( "inline" ), "namespace", OPTIONAL( Identifier ), "{", OPTIONAL( REF( "DeclarationSeq" ) ), "}"
 
 class ExplicitInstantiation( Grammar ):
     grammar = OPTIONAL( "extern" ), "template", REF( "Declaration" )
@@ -927,21 +1050,8 @@ class ExplicitSpecialization( Grammar ):
     grammar = "template", "<", ">", REF( "Declaration" )
 
 class LinkageSpecification( Grammar ):
-    grammar = "extern", StringLiteral, OR( ( "{", OPTIONAL( REF( "DeclarationSeq" ) ), "}" ),
-                                           REF( "Declaration" ) ) 
-
-class NamespaceBody( Grammar ):
-    grammar = OPTIONAL( REF( "DeclarationSeq" ) )
-
-class NamedNamespaceDefinition( Grammar ): #Modified
-    grammar = OPTIONAL( "inline" ), "namespace", Identifier, "{", NamespaceBody, "}"
-
-class UnnamedNamespaceDefinition( Grammar ):
-    grammar = OPTIONAL( "inline" ), "namespace", "{", NamespaceBody, "}" 
-
-class NamespaceDefinition( Grammar ):
-    grammar = OR( NamedNamespaceDefinition,
-                  UnnamedNamespaceDefinition )
+    grammar = "extern", StringLiteral, OR( ( "{", REF( "DeclarationSeq" ), "}" ),
+                                           REF( "Declaration" ) )
 
 class EmptyDeclaration( Grammar ):
     grammar = ";"
@@ -1010,7 +1120,7 @@ def PrintElementStrings( element, string ):
     if not element:
         return
     if not element.elements:
-        stdout.write( string[element.start:element.end] )
+        stdout.write( string[element.start:min(element.start + 20,element.end)] )
     else:
         first_non_none_subelement = None
         last_non_none_subelement = None
@@ -1026,7 +1136,7 @@ def PrintElementStrings( element, string ):
                 break
 
         if not first_non_none_subelement:
-            stdout.write( string[element.start:element.end] )
+            stdout.write( string[element.start:min(element.start + 20,element.end)] )
             return
 
         stdout.write( string[element.start:first_non_none_subelement.start] )
@@ -1090,13 +1200,12 @@ def RemoveComments( string ):
     return ret
 
 def main():
-    #parser = BalancedTokenSeq.parser()
-    #stdout.writelines( generate_ebnf(BalancedTokenSeq) )
-    #string = "float"
+    #parser = BALANCED_UNTIL_TOKENS( ">", True ).parser()
+    #string = "some template, paramr<with, words< here = ( 1 > 2) > >, end >"
     #result = parser.parse_string( string, reset = True, eof = True )
     #PrintElements( result )
     #exit()
-    #
+    
     #TranslationUnit.grammar_resolve_refs( )
    
     string = stdin.read()
