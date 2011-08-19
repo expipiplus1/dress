@@ -134,6 +134,7 @@ class BalancedUntilGrammar (Terminal):
                         break
                     i += 1
             i += 1
+        return None
 
     @classmethod
     def grammar_parse(cls, text, index, sessiondata):
@@ -145,17 +146,19 @@ class BalancedUntilGrammar (Terminal):
             if c in cls.ending_chars and ind_depth <= 0:
                 yield( i - index, cls( string[index:i] ) )
                 break
-            if c == cls.independent_bracket_pair[0]:
-                ind_depth += 1
-            elif c == cls.independent_bracket_pair[1]:
-                ind_depth = max( 0, ind_depth - 1 )
-
+            if len( cls.independent_bracket_pair ) > 0:
+                if c == cls.independent_bracket_pair[0]:
+                    ind_depth += 1
+                elif c == cls.independent_bracket_pair[1]:
+                    ind_depth = max( 0, ind_depth - 1 )
             for bracket_pair in cls.bracket_pairs:
                 if c == bracket_pair[0]:
                     depth = 1
-                    i += 1
                     while depth > 0:
+                        i += 1
                         i = cls.read_until( string, i, ( bracket_pair[0], bracket_pair[1] ) )
+                        if not i:
+                            yield error_result( index, cls )
                         if string[i] == bracket_pair[0]:
                             depth += 1
                         else:
@@ -1075,7 +1078,7 @@ class DeclarationSeq( Grammar ):
     grammar_collapse = True
 
 class TranslationUnit( Grammar ):
-    grammar = DeclarationSeq, EOF
+    grammar = REPEAT( Declaration, collapse = True, min = 0 ), EOF
 
     def elem_init( self, sessiondata ):
         self.start = 0
@@ -1187,7 +1190,10 @@ def RemoveComments( string ):
             
         if match:
             for j in match.group():
-                ret += " "
+                if j == "\n":
+                    ret += "\n"
+                else:
+                    ret += " "
             i += len( match.group() )
             continue 
 
@@ -1208,12 +1214,14 @@ def main():
     
     #TranslationUnit.grammar_resolve_refs( )
    
-    string = stdin.read()
+    #string = stdin.read()
 
-    #f = open( "matrix.hpp", "r" )
-    #string = f.read()
+    f = open( argv[1], "r" )
+    original_string = f.read()
 
-    string = RemoveComments( string )
+    string = RemoveComments( original_string )
+    #print( string )
+    #exit()
 
     parser = TranslationUnit.parser()
     result = parser.parse_string( string, reset = True, eof = True )
@@ -1221,7 +1229,7 @@ def main():
         print( "Failed to parse" )
         return
     CalculateElementsRanges( result, string )
-    PrintElementStrings( result, string )
+    PrintElementStrings( result, original_string )
     print()
     PrintElements( result )
 
