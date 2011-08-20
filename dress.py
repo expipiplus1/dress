@@ -46,20 +46,6 @@ class BalancedGrammar (Terminal):
     opening_char = None
     closing_char = None
 
-    #@classmethod
-    #def __class_init__(cls, attrs):
-        #if isinstance(cls.regexp, str):
-            #cls.regexp = re.compile(cls.regexp, re.MULTILINE)
-        #if cls.regexp and _recaret_re.search(cls.regexp.pattern):
-            #cls.boltest = True
-        #else:
-            #cls.boltest = False
-        #if "grammar_name" not in attrs:
-            #if cls.regexp is not None:
-                #cls.grammar_name = "RE({!r})".format(cls.regexp.pattern)
-            #else:
-                #cls.grammar_name = None
-
     @classmethod
     def grammar_parse(cls, text, index, sessiondata):
         i = index
@@ -178,137 +164,6 @@ class BalancedUntilGrammar (Terminal):
 #
 # C++ Grammar
 #
-
-"""
-class BalancedToken( Grammar ):
-    grammar = OR( ( "(", OPTIONAL( REF( "BalancedTokenSeq" ) ), ")" ),
-                  ( "[", OPTIONAL( REF( "BalancedTokenSeq" ) ), "]" ),
-                  ( "{", OPTIONAL( REF( "BalancedTokenSeq" ) ), "}" ),
-                  EXCEPT( Token, RE( "[([{]" ) ) )
-    grammar_collapse = True
-
-class BalancedTokenSeq( Grammar ):
-    grammar = REPEAT( BalancedToken )
-    grammar_collapse = True
-
-class BalancedToken_Template( Grammar ):
-    grammar = OR( ( "(", OPTIONAL( BalancedTokenSeq ), ")" ),
-                  ( "[", OPTIONAL( BalancedTokenSeq ), "]" ),
-                  ( "{", OPTIONAL( BalancedTokenSeq ), "}" ),
-                  ( "<", OPTIONAL( REF( "BalancedTokenSeq_Template" ) ), ">" ),
-                  EXCEPT( Token, RE( "[([{<]" ) ) )
-    grammar_collapse = True
-
-class BalancedTokenSeq_Template( Grammar ):
-    grammar = REPEAT( BalancedToken_Template )
-    grammar_collapse = True
-
-class AttributeArgumentClause( Grammar ):
-    grammar = "(", BalancedTokenSeq, ")"
-
-class Attribute( Grammar ):
-    grammar = AttributeToken, OPTIONAL( AttributeArgumentClause )
-
-class AttributeList( Grammar ):
-    grammar = LIST_OF( ( Attribute, OPTIONAL( "..." ) ), sep = "," ), OPTIONAL( "," )
-
-
-
-class TypeId( Grammar ): 
-    grammar = TypeSpecifierSeq, OPTIONAL( REF( "AbstractDeclarator" ) )
-
-
-
-
-
-
-
-
-
-class CompoundStatement( Grammar ): #Incomplete
-    grammar = "{", OPTIONAL( REPEAT( OR( RE( "[^{}\\\"]+" ),
-                                         REF( "CompoundStatement" ),
-                                         QuotedString ) ) ), "}"
-
-class MemInitializerId( Grammar ):
-    grammar = OR( ClassOrDecltype,
-                  Identifier )
-
-class MemInitializer( Grammar ):
-    grammar = MemInitializerId, OR( ( "(", REPEAT( EXCEPT( BalancedToken_Template, RE( "[)]" ) ), min = 0 ), ")" ),
-                                    BracedInitList )
-
-class MemInitializerList( Grammar ):
-    grammar = LIST_OF( ( MemInitializer, OPTIONAL( "..." ) ), sep = "," )
-
-class CtorInitializer( Grammar ):
-    grammar = ":", MemInitializerList
-
-class ExceptionDeclaration( Grammar ):
-    grammar = OR( ( OPTIONAL( AttributeSpecifierSeq ), TypeSpecifierSeq, OR( Declarator,
-                                                                             OPTIONAL( AbstractDeclarator ) ) ),
-                  "..." )
-
-class Handler( Grammar ):
-    grammar = "catch", "(", ExceptionDeclaration, ")", CompoundStatement
-
-class HandlerSeq( Grammar ):
-    grammar = REPEAT( Handler )
-
-class FunctionTryBlock( Grammar ):
-    grammar = "try", OPTIONAL( CtorInitializer ), CompoundStatement, HandlerSeq
-
-class FunctionBody( Grammar ): 
-    grammar = OR( ( OPTIONAL( CtorInitializer ), CompoundStatement ),
-                  FunctionTryBlock )
-
-
-
-
-class UsingDirective( Grammar ):
-    grammar = OPTIONAL( AttributeSpecifierSeq ), "using", "namespace", OPTIONAL( "::" ), OPTIONAL( NestedNameSpecifier ), NamespaceName, ";"
-
-
-class ExplicitInstantiation( Grammar ):
-    grammar = OPTIONAL( "extern" ), "template", REF( "Declaration" )
-
-class ExplicitSpecialization( Grammar ):
-    grammar = "template", "<", ">", REF( "Declaration" )
-
-class LinkageSpecification( Grammar ):
-    grammar = "extern", StringLiteral, OR( ( "{", OPTIONAL( REF( "DeclarationSeq" ) ), "}" ),
-                                           REF( "Declaration" ) ) 
-
-
-class EmptyDeclaration( Grammar ):
-    grammar = ";"
-
-class AttributeDeclaration( Grammar ):
-    grammar = AttributeSpecifierSeq, ";"
-    
-class AttributeNamespace( Grammar ):
-    grammar = Identifier
-
-class AttributeScopedToken( Grammar ):
-    grammar = AttributeNamespace, "::", Identifier
-
-class AttributeToken( Grammar ):
-    grammar = OR( Identifier,
-                  AttributeScopedToken )
-  """  
-
-
-
-
-
-
-    ###################################################
-    ###################################################
-    ###################################################
-    ###################################################
-    ###################################################
-    ###################################################
-    ###################################################
     
 class Identifier( Grammar ):
     grammar = EXCEPT( RE( "[A-Za-z_][A-Za-z0-9_]*" ), REF( "Keyword" ) )
@@ -944,17 +799,18 @@ class MemberDeclaration( Grammar ):
                   UsingDeclaration,
                   StaticAssertDeclaration,
                   TemplateDeclaration )
-    grammar = REPEAT( EXCEPT( BalancedBraces, RE( ".*[;}]$" ) ) ), OPTIONAL( ";" )
-    grammar = REPEAT( EXCEPT( BalancedBraces, RE( ";" ) ) ), OPTIONAL( ";" )
-    
-
-class MemberSpecification( Grammar ):
-    grammar = OR( ( AccessSpecifier, ":" ),
-                  MemberDeclaration )
 
 class ClassSpecifier( Grammar ):
     #grammar = ClassHead, "{", REPEAT( MemberSpecification, greedy = False, collapse = True, min = 0 ), "}"
     grammar = ClassHead, "{", BALANCED_TOKENS( "{", "}" ), "}"
+
+    def ParseMembers( self ):
+        member_grammar = REPEAT( OR( ( AccessSpecifier, ":" ),
+                                     MemberDeclaration ), min = 0 )
+        parser = member_grammar.parser()
+        result = parser.parse_string( self.elements[2].string, reset = True, eof = True )
+        self.elements = list( self.elements )
+        self.elements[2] = result
 
 class EnumKey( Grammar ):
     grammar = "enum", OPTIONAL( OR( "class",
@@ -1123,7 +979,8 @@ def PrintElementStrings( element, string ):
     if not element:
         return
     if not element.elements:
-        stdout.write( string[element.start:min(element.start + 20,element.end)] )
+        stdout.write( element.string )
+        #stdout.write( string[element.start:min(element.start + 20,element.end)] )
     else:
         first_non_none_subelement = None
         last_non_none_subelement = None
@@ -1139,7 +996,6 @@ def PrintElementStrings( element, string ):
                 break
 
         if not first_non_none_subelement:
-            stdout.write( string[element.start:min(element.start + 20,element.end)] )
             return
 
         stdout.write( string[element.start:first_non_none_subelement.start] )
@@ -1205,6 +1061,22 @@ def RemoveComments( string ):
 
     return ret
 
+def ParseSubElements( element ):
+    if not element:
+        return
+    if getattr( element, "ParseMembers", None ):
+        element.ParseMembers()
+    for e in element.elements:
+        ParseSubElements( e )
+
+def FormatSubElements( element ):
+    if not element:
+        return
+    if getattr( element, "Format", None ):
+        element.Format()
+    for e in element.elements:
+        FormatSubElements( e )
+
 def main():
     #parser = BALANCED_UNTIL_TOKENS( ">", True ).parser()
     #string = "some template, paramr<with, words< here = ( 1 > 2) > >, end >"
@@ -1220,18 +1092,17 @@ def main():
     original_string = f.read()
 
     string = RemoveComments( original_string )
-    #print( string )
-    #exit()
-
     parser = TranslationUnit.parser()
     result = parser.parse_string( string, reset = True, eof = True )
     if not result:
         print( "Failed to parse" )
         return
+    ParseSubElements( result )
     CalculateElementsRanges( result, string )
+    FormatSubElements( result )
     PrintElementStrings( result, original_string )
-    print()
-    PrintElements( result )
+    #print()
+    #PrintElements( result )
 
 if __name__ == "__main__":
     main()
