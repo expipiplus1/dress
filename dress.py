@@ -6,7 +6,15 @@ from modgrammar.extras import *
 import re
 from sys import *
 
-#grammar_whitespace = re.compile("\s*")
+#grammar_whitespace = re.compile("\s+")
+
+#
+# formatting helper functions
+#
+
+def StripWhitespace( string ):
+    ret = re.sub( "\s+", " ", string, flags = re.MULTILINE )
+    return ret.strip()
 
 #
 # Grammar classes
@@ -794,11 +802,45 @@ class BalancedBraces( Grammar ):
     grammar_collapse = True
 
 class MemberDeclaration( Grammar ):
-    grammar = OR( ( OPTIONAL( AttributeSpecifierSeq ), OPTIONAL( REF( "DeclSpecifierSeq" ) ), OPTIONAL( LIST_OF( MemberDeclarator, sep = "," ) ), ";" ),
-                  ( REF( "FunctionDefinition" ), OPTIONAL( ";" ) ),
+    grammar = OR( ( REF( "FunctionDefinition" ), OPTIONAL( ";" ) ),
+                  ( OPTIONAL( AttributeSpecifierSeq ), OPTIONAL( REF( "DeclSpecifierSeq" ) ), OPTIONAL( LIST_OF( MemberDeclarator, sep = "," ) ), ";" ),
                   UsingDeclaration,
                   StaticAssertDeclaration,
                   TemplateDeclaration )
+
+    def GetDeclSpecifierSize( self ):
+        if isinstance( self.elements[0], UsingDeclaration ) or \
+           isinstance( self.elements[0], StaticAssertDeclaration ) or \
+           isinstance( self.elements[0], TemplateDeclaration ) or \
+           isinstance( self.elements[0].elements[0], FunctionDefinition ):
+           return
+        declaration = self.elements[0]
+        size = 0
+        if declaration.elements[0]:
+            if "\n" in declaration.elements[0].string:
+                return
+            size += len( StripWhitespace( declaration.elements[0].string ) )
+        if declaration.elements[1]:
+            if "\n" in declaration.elements[1].string:
+                return
+            size += len( StripWhitespace( declaration.elements[1].string ) )
+        if declaration.elements[0] and declaration.elements[1]:
+            size += 1
+        return size
+
+    def GetMaxDeclaratorSize( self ):
+        if isinstance( self.elements[0], UsingDeclaration ) or \
+           isinstance( self.elements[0], StaticAssertDeclaration ) or \
+           isinstance( self.elements[0], TemplateDeclaration ) or \
+           isinstance( self.elements[0].elements[0], FunctionDefinition ):
+           return
+        declarators = self.elements[0].elements[2]
+        i = 0
+        max_declarator_size = 0
+        while i < len( declarators.elements ):
+            max_declarator_size = max( max_declarator_size, len( StripWhitespace( declarators.elements[i].string ) ) )
+            i += 2
+        return max_declarator_size
 
 class ClassSpecifier( Grammar ):
     #grammar = ClassHead, "{", REPEAT( MemberSpecification, greedy = False, collapse = True, min = 0 ), "}"
@@ -811,6 +853,24 @@ class ClassSpecifier( Grammar ):
         result = parser.parse_string( self.elements[2].string, reset = True, eof = True )
         self.elements = list( self.elements )
         self.elements[2] = result
+
+    def Format( self, string, indentations ):
+        #
+        # Calculate the correct indentations
+        #
+        max_decl_specifier_size = 0
+        max_declarator_size = 0
+        for member_declaration in self.elements[2]:
+            if getattr( member_declaration, "GetDeclSpecifierSize", None ):
+                decl_specifier_size = member_declaration.GetDeclSpecifierSize()
+                if decl_specifier_size:
+                    max_decl_specifier_size = max( max_decl_specifier_size, decl_specifier_size )
+            if getattr( member_declaration, "GetMaxDeclaratorSize", None ):
+                declarator_size = member_declaration.GetMaxDeclaratorSize()
+                if declarator_size:
+                    max_declarator_size = max( max_declarator_size, declarator_size )
+
+        return self.string
 
 class EnumKey( Grammar ):
     grammar = "enum", OPTIONAL( OR( "class",
@@ -975,13 +1035,16 @@ def RemoveNoneElements( elements ):
     elements = tuple( elements )
     return elements
 
-def PrintElementStrings( element, string ):
+def GetFormattedString( element, indentations = { "indentation":0 } ):
     if not element:
-        return
+        return ""
+    if getattr( element, "Format", None ):
+        return element.Format( indentations )
     if not element.elements:
-        stdout.write( element.string )
-        #stdout.write( string[element.start:min(element.start + 20,element.end)] )
+        return element.string
+        #return string[element.start:element.end]
     else:
+        ret = ""
         first_non_none_subelement = None
         last_non_none_subelement = None
 
@@ -996,13 +1059,14 @@ def PrintElementStrings( element, string ):
                 break
 
         if not first_non_none_subelement:
-            return
+            return ""
 
-        stdout.write( string[element.start:first_non_none_subelement.start] )
+        ret += string[element.start:first_non_none_subelement.start]
+
         for i, subelement in enumerate( element.elements ):
             if not subelement:
                 continue
-            PrintElementStrings( subelement, string )
+            ret += GetFormattedString( subelement, string, indentations )
             if i != len( element.elements ) - 1:
                 next_non_none_subelement = None
                 for next_subelement in element.elements[i+1:]:
@@ -1010,17 +1074,19 @@ def PrintElementStrings( element, string ):
                         next_non_none_subelement = next_subelement
                         break
                 if next_non_none_subelement:
-                    stdout.write( string[ subelement.end: next_non_none_subelement.start ] )
-        stdout.write( string[last_non_none_subelement.end:element.end] )
+                    ret += string[ subelement.end: next_non_none_subelement.start ]
+        ret += string[last_non_none_subelement.end:element.end]
+        return ret
 
-def CalculateElementsRanges( elements, string, offset = 0 ):
+def CalculateElementsRanges( elements, string, original_string, offset = 0 ):
     for element in elements:
         if not element:
             continue
         element.start = string.index( element.string, offset )
         element.end   = element.start + len( element.string )
         offset = element.end
-        CalculateElementsRanges( element.elements, string, element.start )
+        element.string = original_string[ element.start:element.end ]
+        CalculateElementsRanges( element.elements, string, original_string, element.start )
 
 def RemoveComments( string ):
     string_literal_pattern = re.compile( "\"(?:\\\\\"|[^\"])*\"" )
@@ -1069,13 +1135,45 @@ def ParseSubElements( element ):
     for e in element.elements:
         ParseSubElements( e )
 
-def FormatSubElements( element ):
-    if not element:
-        return
-    if getattr( element, "Format", None ):
-        element.Format()
-    for e in element.elements:
-        FormatSubElements( e )
+#def FormatSubElements( element ):
+#    if not element:
+#        return
+#    if getattr( element, "Format", None ):
+#        element.Format()
+#    for e in element.elements:
+#        FormatSubElements( e )
+#
+#def FormatElement( element ):
+#    if not element:
+#        return
+#    if getattr( element, "Format", None ):
+#        element.Format()
+#    else:
+#        for e in elements.elements:
+#            FormatElement( e )
+
+def CheckForOnlyWhitespaceChanges( string1, string2 ):
+    i = 0
+    j = 0
+    whitespace_chars = ( " ", "\t", "\r", "\n" )
+    while i < len( string1 ):
+        if string1[i] in whitespace_chars:
+            i += 1
+            continue
+        while string2[j] in whitespace_chars:
+            j += 1
+            if j >= len( string2 ):
+                return False
+        if string1[i] != string2[j]:
+            return False
+        i += 1
+        j += 1
+    while j < len( string2 ):
+        if not string2[j] in whitespace_chars:
+            return False
+        j += 1
+    return True
+
 
 def main():
     #parser = BALANCED_UNTIL_TOKENS( ">", True ).parser()
@@ -1086,10 +1184,13 @@ def main():
     
     #TranslationUnit.grammar_resolve_refs( )
    
-    #string = stdin.read()
+    original_string = None
 
-    f = open( argv[1], "r" )
-    original_string = f.read()
+    if len( argv ) > 1:
+        f = open( argv[1], "r" )
+        original_string = f.read()
+    else:
+        original_string = stdin.read()
 
     string = RemoveComments( original_string )
     parser = TranslationUnit.parser()
@@ -1098,9 +1199,13 @@ def main():
         print( "Failed to parse" )
         return
     ParseSubElements( result )
-    CalculateElementsRanges( result, string )
-    FormatSubElements( result )
-    PrintElementStrings( result, original_string )
+    CalculateElementsRanges( result, string, original_string )
+    result.string = original_string
+    formatted_string = GetFormattedString( result )
+    if not CheckForOnlyWhitespaceChanges( formatted_string, original_string ):
+        print( "WARNING WARNING WARNING" )
+    #else:
+        #stdout.write( formatted_string )
     #print()
     #PrintElements( result )
 
