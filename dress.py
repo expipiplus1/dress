@@ -16,6 +16,10 @@ def StripWhitespace( string ):
     ret = re.sub( "\s+", " ", string, flags = re.MULTILINE )
     return ret.strip()
 
+def GotoNextTabstop( x ):
+    tab_width = 4
+    return ( ( x + tab_width - 1 ) // tab_width ) * tab_width
+
 #
 # Grammar classes
 #
@@ -736,8 +740,9 @@ class NoptrDeclarator( Grammar ):
                                                                       ( "[", BALANCED_TOKENS( "[", "]" ), "]", OPTIONAL( AttributeSpecifierSeq ) ) ), min = 0 )
 
 class PtrDeclarator( Grammar ):
-    grammar = OR( NoptrDeclarator,
-                  ( PtrOperator, REF( "PtrDeclarator" ) ) )
+    grammar = REPEAT( PtrOperator, min = 0 ), NoptrDeclarator
+    #grammar = OR( NoptrDeclarator,
+                  #( PtrOperator, REF( "PtrDeclarator" ) ) )
 
 class NoptrAbstractDeclarator( Grammar ):
     grammar = "(", REF( "PtrAbstractDeclarator" ), ")", REPEAT( OR( ParametersAndQualifiers,
@@ -758,6 +763,12 @@ class TrailingReturnType( Grammar ):
 class Declarator( Grammar ):
     grammar = OR( ( NoptrDeclarator, ParametersAndQualifiers, TrailingReturnType ),
                   PtrDeclarator )
+
+    def GetNoptrStart( self ):
+        if isinstance( self.elements[0].elements[0], NoptrDeclarator ):
+            return self.start
+        else:
+            return self.elements[0].elements[1].start         
 
 class VirtSpecifier( Grammar ):
     grammar = OR( "override",
@@ -783,6 +794,13 @@ class MemberDeclarator( Grammar ): #incomplete
     grammar = OR( ( Declarator, REPEAT( VirtSpecifier, min = 0 ), OPTIONAL( OR( PureSpecifier,
                                                                                      BraceOrEqualInitializer ) ) ),
                   ( OPTIONAL( Identifier ), OPTIONAL( AttributeSpecifierSeq ), REPEAT( VirtSpecifier, min = 0 ), ":", BALANCED_UNTIL_TOKENS( ( ";", "," ), True ) ) ) 
+
+
+    def GetNoptrStart( self ):
+        if isinstance( self.elements[0].elements[0], Declarator ):
+            return self.elements[0].elements[0].GetNoptrStart()
+        else:
+            return self.start
 
 class UsingDeclaration( Grammar ):
     #grammar = "using", REPEAT( Token, greedy = False, collapse = True ), ";" 
@@ -816,17 +834,35 @@ class MemberDeclaration( Grammar ):
            return
         declaration = self.elements[0]
         size = 0
-        if declaration.elements[0]:
-            if "\n" in declaration.elements[0].string:
-                return
-            size += len( StripWhitespace( declaration.elements[0].string ) )
-        if declaration.elements[1]:
-            if "\n" in declaration.elements[1].string:
-                return
-            size += len( StripWhitespace( declaration.elements[1].string ) )
-        if declaration.elements[0] and declaration.elements[1]:
-            size += 1
-        return size
+        declarators = declaration.elements[2]
+        end_index = 0
+        if declarators and len( declarators.elements ) == 1:
+            end_index = declarators.elements[0].GetNoptrStart()
+        elif declaration.elements[1]:
+            end_index = declaration.elements[1].end
+        elif declaration.elements[0]:
+            end_index = declaration.elements[0].end
+        else:
+            return
+
+        string = self.string[: end_index - self.start]
+        if "\n" in string:
+            return
+        
+        print(  len( StripWhitespace( string ) ))
+        return len( StripWhitespace( string ) )
+
+        #if declaration.elements[0]:
+            #if "\n" in declaration.elements[0].string:
+                #return
+            #size += len( StripWhitespace( declaration.elements[0].string ) )
+        #if declaration.elements[1]:
+            #if "\n" in declaration.elements[1].string:
+                #return
+            #size += len( StripWhitespace( declaration.elements[1].string ) )
+        #if declaration.elements[0] and declaration.elements[1]:
+            #size += 1
+        #return size
 
     def GetMaxDeclaratorSize( self ):
         if isinstance( self.elements[0], UsingDeclaration ) or \
@@ -835,26 +871,92 @@ class MemberDeclaration( Grammar ):
            isinstance( self.elements[0].elements[0], FunctionDefinition ):
            return
         declarators = self.elements[0].elements[2]
-        i = 0
         max_declarator_size = 0
-        while i < len( declarators.elements ):
-            max_declarator_size = max( max_declarator_size, len( StripWhitespace( declarators.elements[i].string ) ) )
-            i += 2
+        if len( declarators.elements ) > 1:
+            i = 0
+            while i < len( declarators.elements ):
+                max_declarator_size = max( max_declarator_size, len( StripWhitespace( declarators.elements[i].string ) ) )
+                i += 2
+        else:
+            # The declarator will not include the ptr operator
+            declarator = declarators.elements[0]
+            max_declarator_size = len( StripWhitespace( declarator.string[ declarator.GetNoptrStart() - declarator.start : ] ) )
         return max_declarator_size
+
+    def Format( self, indentations ):
+        ret = ""
+        if isinstance( self.elements[0], UsingDeclaration ) or \
+           isinstance( self.elements[0], StaticAssertDeclaration ) or \
+           isinstance( self.elements[0], TemplateDeclaration ):
+            ret += self.elements[0].Format( indentations )
+        elif isinstance( self.elements[0].elements[0], FunctionDefinition ):
+            ret += self.elements[0].elements[0].Format( indentations )
+            ret += self.string[ self.elements[0].end - self.start: ]
+        else: 
+            for i in range( indentations[ "decl_specifier" ] ):
+                ret += " "
+            declaration = self.elements[0]
+            if declaration.elements[0]:
+                ret += StripWhitespace( declaration.elements[0].string )
+                if declaration.elements[1]:
+                    ret += " "
+            if declaration.elements[1]:
+                ret += StripWhitespace( declaration.elements[1].string )
+            declarators = declaration.elements[2]
+            if declarators:
+                if len( declarators.elements ) > 1:
+                    if declaration.elements[0] or declaration.elements[1]:
+                        ret += " "
+                    p = len( ret )
+                    i = 0
+                    while i < len( declarators.elements ):
+                        while p < indentations[ "declarator" ]:
+                            ret += " "
+                            p += 1 
+                        ret += StripWhitespace( declarators.elements[i].string )
+                        if i != len( declarators.elements ) - 1:
+                            ret += ",\n" 
+                            p = 0
+                        i += 2
+                else:
+                    declarator = declarators.elements[0]
+                    last = 0
+                    if declaration.elements[1]:
+                        last = declaration.elements[1].end
+                    elif declaration.elements[0]:
+                        last = declaration.elements[0].end
+                    ret += StripWhitespace( self.string[last-self.start:declarator.GetNoptrStart()-self.start] )
+                    p = len( ret )
+                    while p < indentations[ "declarator" ]:
+                        ret += " "
+                        p += 1 
+                    ret += StripWhitespace( self.string[declarator.GetNoptrStart() - self.start : declarator.end - self.start] )
+            ret += ";"
+            return ret
+
+class MemberAccessSpecifier( Grammar ):
+    grammar = AccessSpecifier, ":"
+
+    def Format( self, indentations ):
+        ret = ""
+        for i in range( indentations[ "decl_specifier" ] ):
+            ret += " "
+        ret += self.string
+        return ret
 
 class ClassSpecifier( Grammar ):
     #grammar = ClassHead, "{", REPEAT( MemberSpecification, greedy = False, collapse = True, min = 0 ), "}"
     grammar = ClassHead, "{", BALANCED_TOKENS( "{", "}" ), "}"
 
     def ParseMembers( self ):
-        member_grammar = REPEAT( OR( ( AccessSpecifier, ":" ),
+        member_grammar = REPEAT( OR( MemberAccessSpecifier,
                                      MemberDeclaration ), min = 0 )
         parser = member_grammar.parser()
         result = parser.parse_string( self.elements[2].string, reset = True, eof = True )
         self.elements = list( self.elements )
-        self.elements[2] = result
+        self.elements[2] = result   
 
-    def Format( self, string, indentations ):
+    def Format( self, indentations ):
         #
         # Calculate the correct indentations
         #
@@ -870,7 +972,34 @@ class ClassSpecifier( Grammar ):
                 if declarator_size:
                     max_declarator_size = max( max_declarator_size, declarator_size )
 
-        return self.string
+        indentations["indentation"] += 4
+        indentations["decl_specifier"] = indentations["indentation"]
+        indentations["declarator"] = GotoNextTabstop( indentations["decl_specifier"] + max_decl_specifier_size + 1)
+
+        ret = ""
+        ret += self.string[:self.elements[1].end - self.start]
+        
+        p = self.elements[1].end
+         
+        for member_declaration in self.elements[2]:
+            whitespace = self.string[p - self.start : member_declaration.start - self.start]
+            whitespace_chars = ( " ", "\t", "\r", "\n" )
+            i = len( whitespace ) - 1
+            while i >= 0:
+                if not whitespace[i] in whitespace_chars:
+                    whitespace = whitespace[:i+1]
+                    break
+                if whitespace[i] == "\n":
+                    whitespace = whitespace[:i]
+                    break
+                i -= 1
+            whitespace += "\n"
+            ret += whitespace
+            ret += member_declaration.Format( indentations )
+            p = member_declaration.end
+
+        ret += self.string[p - self.start:]
+        return ret
 
 class EnumKey( Grammar ):
     grammar = "enum", OPTIONAL( OR( "class",
@@ -1035,6 +1164,41 @@ def RemoveNoneElements( elements ):
     elements = tuple( elements )
     return elements
 
+def FormatTree( element, indentations ):
+    ret = ""
+    first_non_none_subelement = None
+    last_non_none_subelement = None
+
+    for subelement in element.elements:
+        if subelement:
+            first_non_none_subelement = subelement
+            break
+
+    for subelement in reversed( element.elements ):
+        if subelement:
+            last_non_none_subelement = subelement
+            break
+
+    if not first_non_none_subelement:
+        return ""
+
+    ret += element.string[:first_non_none_subelement.start - element.start]
+
+    for i, subelement in enumerate( element.elements ):
+        if not subelement:
+            continue
+        ret += GetFormattedString( subelement, indentations )
+        if i != len( element.elements ) - 1:
+            next_non_none_subelement = None
+            for next_subelement in element.elements[i+1:]:
+                if next_subelement:
+                    next_non_none_subelement = next_subelement
+                    break
+            if next_non_none_subelement:
+                ret += element.string[ subelement.end - element.start: next_non_none_subelement.start - element.start ]
+    ret += element.string[last_non_none_subelement.end - element.start:]
+    return ret
+
 def GetFormattedString( element, indentations = { "indentation":0 } ):
     if not element:
         return ""
@@ -1042,41 +1206,8 @@ def GetFormattedString( element, indentations = { "indentation":0 } ):
         return element.Format( indentations )
     if not element.elements:
         return element.string
-        #return string[element.start:element.end]
     else:
-        ret = ""
-        first_non_none_subelement = None
-        last_non_none_subelement = None
-
-        for subelement in element.elements:
-            if subelement:
-                first_non_none_subelement = subelement
-                break
-
-        for subelement in reversed( element.elements ):
-            if subelement:
-                last_non_none_subelement = subelement
-                break
-
-        if not first_non_none_subelement:
-            return ""
-
-        ret += string[element.start:first_non_none_subelement.start]
-
-        for i, subelement in enumerate( element.elements ):
-            if not subelement:
-                continue
-            ret += GetFormattedString( subelement, string, indentations )
-            if i != len( element.elements ) - 1:
-                next_non_none_subelement = None
-                for next_subelement in element.elements[i+1:]:
-                    if next_subelement:
-                        next_non_none_subelement = next_subelement
-                        break
-                if next_non_none_subelement:
-                    ret += string[ subelement.end: next_non_none_subelement.start ]
-        ret += string[last_non_none_subelement.end:element.end]
-        return ret
+        return FormatTree( element, indentations )
 
 def CalculateElementsRanges( elements, string, original_string, offset = 0 ):
     for element in elements:
@@ -1135,23 +1266,6 @@ def ParseSubElements( element ):
     for e in element.elements:
         ParseSubElements( e )
 
-#def FormatSubElements( element ):
-#    if not element:
-#        return
-#    if getattr( element, "Format", None ):
-#        element.Format()
-#    for e in element.elements:
-#        FormatSubElements( e )
-#
-#def FormatElement( element ):
-#    if not element:
-#        return
-#    if getattr( element, "Format", None ):
-#        element.Format()
-#    else:
-#        for e in elements.elements:
-#            FormatElement( e )
-
 def CheckForOnlyWhitespaceChanges( string1, string2 ):
     i = 0
     j = 0
@@ -1202,10 +1316,9 @@ def main():
     CalculateElementsRanges( result, string, original_string )
     result.string = original_string
     formatted_string = GetFormattedString( result )
+    stdout.write( formatted_string )
     if not CheckForOnlyWhitespaceChanges( formatted_string, original_string ):
         print( "WARNING WARNING WARNING" )
-    #else:
-        #stdout.write( formatted_string )
     #print()
     #PrintElements( result )
 
